@@ -179,6 +179,18 @@ voice-capture-api/
 
 ---
 
+## Frontend Integrado
+
+| Componente | Repositorio | Estado |
+|------------|-------------|--------|
+| Dashboard Frontend | `genius-voice-dashboard` | ✅ Integrado |
+| API Client | `src/lib/api.ts` | ✅ Conectado a Railway backend |
+| Batch Transcription UI | `ProjectDetail.tsx` | ✅ Usa endpoints reales |
+| Export CSV UI | `ProjectDetail.tsx` | ✅ Usa endpoint real |
+| Auth Flow | Supabase Auth | ✅ JWT pasado al backend |
+
+---
+
 ## Historial de Cambios
 
 | Fecha | Cambio | Commit |
@@ -188,6 +200,7 @@ voice-capture-api/
 | 2026-01-22 | **Setup infraestructura Supabase completo**: schema SQL ejecutado, bucket storage creado, .env configurado, dependencias instaladas | - |
 | 2026-01-22 | **Servidor probado localmente**: /health, /api/projects, /api/upload funcionando correctamente | - |
 | 2026-01-22 | **Deploy a Railway completado**: API en producción en https://voice-capture-api-production.up.railway.app | - |
+| 2026-01-22 | **Frontend integrado**: genius-voice-dashboard conectado al backend via API client (`5805fd5`) | - |
 
 ---
 
