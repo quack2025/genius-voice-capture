@@ -1,8 +1,9 @@
 # Voice Capture API - Estado del Proyecto
 
-**Última actualización:** 2026-01-22
-**Branch activo:** `claude/review-code-spec-xmiXC`
+**Última actualización:** 2026-01-22 (actualizado)
+**Branch activo:** `main`
 **Repositorio:** genius-voice-capture
+**Proyecto Supabase:** `hggwsdqjkwydiubhvrvq` (eu-central-1)
 
 ---
 
@@ -38,12 +39,23 @@ Voice Capture es un backend API que permite capturar respuestas de audio en encu
 | Schema SQL | `database/schema.sql` | ✅ Completo | Tablas, índices, RLS |
 | Tests Unitarios | `tests/` | ✅ Básicos | Validators, utils |
 
+### Infraestructura Configurada
+
+| Componente | Estado | Detalles |
+|------------|--------|----------|
+| Proyecto Supabase | ✅ Listo | `hggwsdqjkwydiubhvrvq` en eu-central-1 |
+| Schema SQL ejecutado | ✅ Listo | Tablas: projects, recordings, transcription_batches |
+| RLS Policies | ✅ Listo | Todas las tablas con Row Level Security |
+| Storage Bucket | ✅ Listo | `voice-recordings` (privado, 10MB max, audio/*) |
+| OpenAI API Key | ✅ Configurado | Key de producción en .env |
+| Variables .env | ✅ Configurado | Todas las variables configuradas |
+| Dependencias npm | ✅ Instaladas | 429 paquetes, 0 vulnerabilidades |
+
 ### Pendiente / Por Hacer
 
 | Tarea | Prioridad | Notas |
 |-------|-----------|-------|
-| Configurar Supabase real | 🔴 Alta | Crear proyecto, ejecutar SQL, crear bucket |
-| Configurar OpenAI API Key | 🔴 Alta | Obtener API key de producción |
+| ~~Probar servidor localmente~~ | ✅ Listo | Servidor corriendo en puerto 3000, /health OK |
 | Tests de integración | 🟡 Media | Tests E2E con supertest |
 | Export XLSX | 🟢 Baja | Actualmente solo CSV, xlsx retorna 501 |
 | Cola asíncrona | 🟢 Baja | Migrar de sync a Bull/pg_notify para escala |
@@ -140,23 +152,24 @@ voice-capture-api/
 
 ## Próximos Pasos Recomendados
 
-1. **Configurar entorno Supabase**
-   - Crear proyecto en supabase.com
-   - Ejecutar `database/schema.sql`
-   - Crear bucket `voice-recordings`
-   - Obtener URL y keys
+1. ~~**Configurar entorno Supabase**~~ ✅ COMPLETADO
+   - ~~Crear proyecto en supabase.com~~
+   - ~~Ejecutar `database/schema.sql`~~
+   - ~~Crear bucket `voice-recordings`~~
+   - ~~Obtener URL y keys~~
 
-2. **Configurar OpenAI**
-   - Obtener API key de platform.openai.com
-   - Verificar créditos disponibles
+2. ~~**Configurar OpenAI**~~ ✅ COMPLETADO
+   - ~~Obtener API key de platform.openai.com~~
+   - ~~Verificar créditos disponibles~~
 
-3. **Probar localmente**
-   - Copiar `.env.example` a `.env`
-   - Configurar variables
-   - `npm install && npm run dev`
-   - Probar endpoint `/health`
+3. ~~**Probar localmente**~~ ✅ COMPLETADO
+   - ~~Copiar `.env.example` a `.env`~~ ✅
+   - ~~Configurar variables~~ ✅
+   - ~~`npm install`~~ ✅
+   - ~~`npm run dev` - Iniciar servidor~~ ✅
+   - ~~Probar endpoint `/health`~~ ✅
 
-4. **Deploy inicial**
+4. **Deploy inicial** ⬅️ SIGUIENTE
    - Configurar Railway o similar
    - Variables de entorno en plataforma
    - Verificar CORS con dominios reales
@@ -169,6 +182,8 @@ voice-capture-api/
 |-------|--------|--------|
 | 2026-01-22 | Implementación inicial completa del API | `00d94d6` |
 | 2026-01-22 | Corrección de especificación (tablas, CORS, endpoints) | `00d94d6` |
+| 2026-01-22 | **Setup infraestructura Supabase completo**: schema SQL ejecutado, bucket storage creado, .env configurado, dependencias instaladas | - |
+| 2026-01-22 | **Servidor probado localmente**: /health, /api/projects, /api/upload funcionando correctamente | - |
 
 ---
 
