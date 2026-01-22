@@ -1,9 +1,10 @@
 # Voice Capture API - Estado del Proyecto
 
-**Última actualización:** 2026-01-22 (actualizado)
+**Última actualización:** 2026-01-22
 **Branch activo:** `main`
 **Repositorio:** genius-voice-capture
 **Proyecto Supabase:** `hggwsdqjkwydiubhvrvq` (eu-central-1)
+**Railway URL:** https://voice-capture-api-production.up.railway.app
 
 ---
 
@@ -50,17 +51,18 @@ Voice Capture es un backend API que permite capturar respuestas de audio en encu
 | OpenAI API Key | ✅ Configurado | Key de producción en .env |
 | Variables .env | ✅ Configurado | Todas las variables configuradas |
 | Dependencias npm | ✅ Instaladas | 429 paquetes, 0 vulnerabilidades |
+| Railway Deploy | ✅ Desplegado | https://voice-capture-api-production.up.railway.app |
 
 ### Pendiente / Por Hacer
 
 | Tarea | Prioridad | Notas |
 |-------|-----------|-------|
 | ~~Probar servidor localmente~~ | ✅ Listo | Servidor corriendo en puerto 3000, /health OK |
+| ~~Deploy a Railway~~ | ✅ Listo | https://voice-capture-api-production.up.railway.app |
 | Tests de integración | 🟡 Media | Tests E2E con supertest |
 | Export XLSX | 🟢 Baja | Actualmente solo CSV, xlsx retorna 501 |
 | Cola asíncrona | 🟢 Baja | Migrar de sync a Bull/pg_notify para escala |
 | Logging estructurado | 🟢 Baja | Agregar winston o pino |
-| Deploy a Railway | 🟡 Media | Configurar variables de entorno en Railway |
 
 ---
 
@@ -169,10 +171,11 @@ voice-capture-api/
    - ~~`npm run dev` - Iniciar servidor~~ ✅
    - ~~Probar endpoint `/health`~~ ✅
 
-4. **Deploy inicial** ⬅️ SIGUIENTE
-   - Configurar Railway o similar
-   - Variables de entorno en plataforma
-   - Verificar CORS con dominios reales
+4. ~~**Deploy inicial**~~ ✅ COMPLETADO
+   - ~~Configurar Railway~~ ✅
+   - ~~Variables de entorno en plataforma~~ ✅
+   - ~~Verificar health endpoint~~ ✅
+   - URL: https://voice-capture-api-production.up.railway.app
 
 ---
 
@@ -184,6 +187,7 @@ voice-capture-api/
 | 2026-01-22 | Corrección de especificación (tablas, CORS, endpoints) | `00d94d6` |
 | 2026-01-22 | **Setup infraestructura Supabase completo**: schema SQL ejecutado, bucket storage creado, .env configurado, dependencias instaladas | - |
 | 2026-01-22 | **Servidor probado localmente**: /health, /api/projects, /api/upload funcionando correctamente | - |
+| 2026-01-22 | **Deploy a Railway completado**: API en producción en https://voice-capture-api-production.up.railway.app | - |
 
 ---
 
