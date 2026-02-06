@@ -17,7 +17,7 @@ router.get('/',
     asyncHandler(async (req, res) => {
         const userId = req.user.id;
 
-        // Get projects with recording counts
+        // Get projects with recording counts using RPC or single query
         const { data: projects, error } = await supabaseAdmin
             .from('projects')
             .select(`
@@ -37,27 +37,39 @@ router.get('/',
             throw new Error(`Failed to fetch projects: ${error.message}`);
         }
 
-        // Get recording counts for each project
-        const projectsWithCounts = await Promise.all(
-            projects.map(async (project) => {
-                const { count: totalCount } = await supabaseAdmin
-                    .from('recordings')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('project_id', project.id);
+        if (projects.length === 0) {
+            return res.json({ projects: [] });
+        }
 
-                const { count: pendingCount } = await supabaseAdmin
-                    .from('recordings')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('project_id', project.id)
-                    .eq('status', 'pending');
+        // Get all recording counts in a single query instead of N+1
+        const projectIds = projects.map(p => p.id);
 
-                return {
-                    ...project,
-                    recordings_count: totalCount || 0,
-                    pending_count: pendingCount || 0
-                };
-            })
-        );
+        const { data: countData } = await supabaseAdmin
+            .from('recordings')
+            .select('project_id, status')
+            .in('project_id', projectIds);
+
+        // Aggregate counts in memory (much faster than N+1 queries)
+        const counts = {};
+        for (const id of projectIds) {
+            counts[id] = { total: 0, pending: 0 };
+        }
+        if (countData) {
+            for (const rec of countData) {
+                if (counts[rec.project_id]) {
+                    counts[rec.project_id].total++;
+                    if (rec.status === 'pending') {
+                        counts[rec.project_id].pending++;
+                    }
+                }
+            }
+        }
+
+        const projectsWithCounts = projects.map(project => ({
+            ...project,
+            recordings_count: counts[project.id]?.total || 0,
+            pending_count: counts[project.id]?.pending || 0
+        }));
 
         res.json({ projects: projectsWithCounts });
     })

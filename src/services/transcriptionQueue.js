@@ -1,6 +1,38 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { transcribeAudio, calculateTranscriptionCost } = require('./whisper');
 
+// Simple in-memory concurrency limiter
+const MAX_CONCURRENT = 3;
+let activeJobs = 0;
+const pendingQueue = [];
+
+function runWithConcurrencyLimit(fn) {
+    return new Promise((resolve, reject) => {
+        const execute = async () => {
+            activeJobs++;
+            try {
+                const result = await fn();
+                resolve(result);
+            } catch (err) {
+                reject(err);
+            } finally {
+                activeJobs--;
+                // Process next in queue
+                if (pendingQueue.length > 0) {
+                    const next = pendingQueue.shift();
+                    next();
+                }
+            }
+        };
+
+        if (activeJobs < MAX_CONCURRENT) {
+            execute();
+        } else {
+            pendingQueue.push(execute);
+        }
+    });
+}
+
 /**
  * Process a single recording transcription
  * @param {string} recordingId - Recording UUID
@@ -11,12 +43,17 @@ async function processRecording(recordingId) {
         // Get recording details
         const { data: recording, error: fetchError } = await supabaseAdmin
             .from('recordings')
-            .select('id, audio_path, project_id, projects(language)')
+            .select('id, audio_path, status, project_id, projects(language)')
             .eq('id', recordingId)
             .single();
 
         if (fetchError || !recording) {
             throw new Error(`Recording not found: ${recordingId}`);
+        }
+
+        // Guard: don't re-process completed recordings
+        if (recording.status === 'completed') {
+            return { success: true, transcription: 'Already transcribed' };
         }
 
         // Update status to processing
@@ -50,14 +87,15 @@ async function processRecording(recordingId) {
                 status: 'failed',
                 error_message: error.message
             })
-            .eq('id', recordingId);
+            .eq('id', recordingId)
+            .catch(dbErr => console.error('Failed to update recording status:', dbErr));
 
         return { success: false, error: error.message };
     }
 }
 
 /**
- * Process batch transcription
+ * Process batch transcription with concurrency control
  * @param {string} batchId - Batch UUID
  * @returns {Promise<void>}
  */
@@ -74,13 +112,22 @@ async function processBatch(batchId) {
             throw new Error(`Failed to fetch batch recordings: ${fetchError.message}`);
         }
 
+        if (!recordings || recordings.length === 0) {
+            await supabaseAdmin
+                .from('transcription_batches')
+                .update({ status: 'completed', completed_at: new Date().toISOString() })
+                .eq('id', batchId);
+            return;
+        }
+
         let completedCount = 0;
         let failedCount = 0;
-        let actualCost = 0;
 
-        // Process each recording
+        // Process each recording sequentially (Whisper calls are rate-limited by the concurrency limiter)
         for (const recording of recordings) {
-            const result = await processRecording(recording.id);
+            const result = await runWithConcurrencyLimit(
+                () => processRecording(recording.id)
+            );
 
             if (result.success) {
                 completedCount++;
@@ -105,6 +152,7 @@ async function processBatch(batchId) {
             .eq('batch_id', batchId)
             .eq('status', 'completed');
 
+        let actualCost = 0;
         if (completedRecordings) {
             const totalDuration = completedRecordings.reduce(
                 (sum, r) => sum + (r.duration_seconds || 0),
@@ -125,43 +173,42 @@ async function processBatch(batchId) {
                 completed_at: new Date().toISOString()
             })
             .eq('id', batchId);
+
+        console.log(`Batch ${batchId} completed: ${completedCount} ok, ${failedCount} failed`);
     } catch (error) {
         console.error('Batch processing error:', error);
 
         await supabaseAdmin
             .from('transcription_batches')
             .update({ status: 'failed' })
-            .eq('id', batchId);
+            .eq('id', batchId)
+            .catch(dbErr => console.error('Failed to update batch status:', dbErr));
     }
 }
 
 /**
- * Enqueue recording for transcription (immediate processing for MVP)
+ * Enqueue recording for transcription with concurrency control
  * @param {string} recordingId - Recording UUID
  * @returns {Promise<void>}
  */
 async function enqueueTranscription(recordingId) {
-    // For MVP: process synchronously
-    // TODO: Replace with proper queue (Bull, pg_notify, etc.) for scalability
-    setImmediate(() => {
-        processRecording(recordingId).catch(err => {
-            console.error(`Failed to process recording ${recordingId}:`, err);
-        });
+    // Process with concurrency limit (max 3 simultaneous Whisper calls)
+    // NOTE: For production scale, replace with BullMQ + Redis
+    runWithConcurrencyLimit(() => processRecording(recordingId)).catch(err => {
+        console.error(`Failed to process recording ${recordingId}:`, err);
     });
 }
 
 /**
- * Start batch processing (async)
+ * Start batch processing (async with concurrency control)
  * @param {string} batchId - Batch UUID
  * @returns {Promise<void>}
  */
 async function startBatchProcessing(batchId) {
-    // For MVP: process in background
-    // TODO: Replace with proper queue for scalability
-    setImmediate(() => {
-        processBatch(batchId).catch(err => {
-            console.error(`Failed to process batch ${batchId}:`, err);
-        });
+    // Process in background with concurrency control
+    // NOTE: For production scale, replace with BullMQ + Redis
+    processBatch(batchId).catch(err => {
+        console.error(`Failed to process batch ${batchId}:`, err);
     });
 }
 

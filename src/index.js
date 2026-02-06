@@ -22,7 +22,10 @@ app.use(helmet());
 
 // CORS configuration
 function isOriginAllowed(origin) {
-    if (!origin) return true; // Allow requests with no origin (mobile apps, curl, etc.)
+    // In production, require an origin header to prevent CSRF
+    if (!origin) {
+        return config.nodeEnv === 'development';
+    }
     if (config.allowedOrigins.includes(origin)) return true;
     return config.wildcardPatterns.some(pattern => pattern.test(origin));
 }
