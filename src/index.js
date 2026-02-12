@@ -14,6 +14,8 @@ const projectsRoutes = require('./routes/projects');
 const recordingsRoutes = require('./routes/recordings');
 const transcribeRoutes = require('./routes/transcribe');
 const exportRoutes = require('./routes/export');
+const transcribeImmediateRoutes = require('./routes/transcribeImmediate');
+const path = require('path');
 
 const app = express();
 
@@ -78,7 +80,11 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Serve static files (widget voice.js)
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 // API routes
+app.use('/api/transcribe', uploadLimiter, transcribeImmediateRoutes);
 app.use('/api/upload', uploadLimiter, uploadRoutes);
 app.use('/api/projects', apiLimiter, projectsRoutes);
 app.use('/api/projects/:projectId/recordings', apiLimiter, recordingsRoutes);

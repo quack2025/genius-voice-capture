@@ -14,34 +14,52 @@ function sleep(ms) {
 }
 
 /**
- * Transcribe audio file using OpenAI Whisper with timeout and retry
- * @param {string} audioPath - Path in Supabase Storage
+ * Get MIME type from file extension
+ * @param {string} extension
+ * @returns {string}
+ */
+function getMimeType(extension) {
+    const mimeTypes = {
+        'webm': 'audio/webm',
+        'mp3': 'audio/mpeg',
+        'wav': 'audio/wav',
+        'mp4': 'audio/mp4',
+        'ogg': 'audio/ogg',
+        'mpeg': 'audio/mpeg'
+    };
+    return mimeTypes[extension.toLowerCase()] || 'audio/webm';
+}
+
+/**
+ * Get file extension from MIME type
+ * @param {string} mimeType
+ * @returns {string}
+ */
+function getExtensionFromMimeType(mimeType) {
+    const extensions = {
+        'audio/webm': 'webm',
+        'audio/mp3': 'mp3',
+        'audio/mpeg': 'mp3',
+        'audio/wav': 'wav',
+        'audio/mp4': 'mp4',
+        'audio/ogg': 'ogg'
+    };
+    return extensions[mimeType] || 'webm';
+}
+
+/**
+ * Transcribe audio directly from a Buffer (no storage download needed).
+ * Uses OpenAI Whisper with timeout and retry.
+ * @param {Buffer} audioBuffer - Raw audio data
+ * @param {string} extension - File extension (webm, mp3, wav, etc.)
  * @param {string} language - Expected language (es, en, pt, etc.)
  * @returns {Promise<{text: string, language: string, duration: number}>}
  */
-async function transcribeAudio(audioPath, language = 'es') {
-    // Validate language
+async function transcribeFromBuffer(audioBuffer, extension = 'webm', language = 'es') {
     const lang = VALID_LANGUAGES.includes(language) ? language : 'es';
-
-    // 1. Download audio from Supabase Storage
-    const { data, error } = await supabaseAdmin.storage
-        .from(config.storageBucket)
-        .download(audioPath);
-
-    if (error) {
-        throw new Error(`Failed to download audio: ${error.message}`);
-    }
-
-    // 2. Convert Blob to Buffer
-    const audioBuffer = Buffer.from(await data.arrayBuffer());
-
-    // Determine file extension from path
-    const extension = audioPath.split('.').pop() || 'webm';
     const mimeType = getMimeType(extension);
-
     const audioFile = new File([audioBuffer], `audio.${extension}`, { type: mimeType });
 
-    // 3. Call Whisper API with retry and timeout
     let lastError;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
@@ -82,20 +100,30 @@ async function transcribeAudio(audioPath, language = 'es') {
 }
 
 /**
- * Get MIME type from file extension
- * @param {string} extension
- * @returns {string}
+ * Transcribe audio file from Supabase Storage using OpenAI Whisper.
+ * Downloads from storage, then delegates to transcribeFromBuffer.
+ * @param {string} audioPath - Path in Supabase Storage
+ * @param {string} language - Expected language (es, en, pt, etc.)
+ * @returns {Promise<{text: string, language: string, duration: number}>}
  */
-function getMimeType(extension) {
-    const mimeTypes = {
-        'webm': 'audio/webm',
-        'mp3': 'audio/mpeg',
-        'wav': 'audio/wav',
-        'mp4': 'audio/mp4',
-        'ogg': 'audio/ogg',
-        'mpeg': 'audio/mpeg'
-    };
-    return mimeTypes[extension.toLowerCase()] || 'audio/webm';
+async function transcribeAudio(audioPath, language = 'es') {
+    // 1. Download audio from Supabase Storage
+    const { data, error } = await supabaseAdmin.storage
+        .from(config.storageBucket)
+        .download(audioPath);
+
+    if (error) {
+        throw new Error(`Failed to download audio: ${error.message}`);
+    }
+
+    // 2. Convert Blob to Buffer
+    const audioBuffer = Buffer.from(await data.arrayBuffer());
+
+    // 3. Determine extension from path
+    const extension = audioPath.split('.').pop() || 'webm';
+
+    // 4. Delegate to transcribeFromBuffer
+    return transcribeFromBuffer(audioBuffer, extension, language);
 }
 
 /**
@@ -110,5 +138,7 @@ function calculateTranscriptionCost(durationSeconds) {
 
 module.exports = {
     transcribeAudio,
-    calculateTranscriptionCost
+    transcribeFromBuffer,
+    calculateTranscriptionCost,
+    getExtensionFromMimeType
 };

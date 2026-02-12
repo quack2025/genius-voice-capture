@@ -61,14 +61,16 @@ router.get('/',
             throw new Error(`Failed to fetch recordings: ${error.message}`);
         }
 
-        // Add signed URLs for audio
+        // Add signed URLs for audio (only for recordings with stored audio)
         const recordingsWithUrls = await Promise.all(
             recordings.map(async (recording) => {
                 let audioUrl = null;
-                try {
-                    audioUrl = await getSignedUrl(recording.audio_path);
-                } catch (e) {
-                    console.error(`Failed to get signed URL for ${recording.id}:`, e);
+                if (recording.audio_path) {
+                    try {
+                        audioUrl = await getSignedUrl(recording.audio_path);
+                    } catch (e) {
+                        console.error(`Failed to get signed URL for ${recording.id}:`, e);
+                    }
                 }
                 return {
                     ...recording,
@@ -122,12 +124,14 @@ router.get('/:recordingId',
             throw new HttpError(404, 'Recording not found');
         }
 
-        // Get signed URL
+        // Get signed URL (only if audio is stored)
         let audioUrl = null;
-        try {
-            audioUrl = await getSignedUrl(recording.audio_path);
-        } catch (e) {
-            console.error(`Failed to get signed URL for ${recordingId}:`, e);
+        if (recording.audio_path) {
+            try {
+                audioUrl = await getSignedUrl(recording.audio_path);
+            } catch (e) {
+                console.error(`Failed to get signed URL for ${recordingId}:`, e);
+            }
         }
 
         res.json({
@@ -164,13 +168,18 @@ router.post('/:recordingId/retranscribe',
         // Get recording
         const { data: recording, error } = await supabaseAdmin
             .from('recordings')
-            .select('id, transcription, status')
+            .select('id, transcription, status, audio_path')
             .eq('id', recordingId)
             .eq('project_id', projectId)
             .single();
 
         if (error || !recording) {
             throw new HttpError(404, 'Recording not found');
+        }
+
+        // Guard: cannot retranscribe if no audio file stored
+        if (!recording.audio_path) {
+            throw new HttpError(400, 'Cannot retranscribe: no audio file stored for this recording');
         }
 
         // Save previous transcription and update status
