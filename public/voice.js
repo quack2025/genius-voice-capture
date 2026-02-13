@@ -1,25 +1,26 @@
 /**
- * Genius Voice Capture Widget v1.1
+ * Genius Voice Capture Widget v1.2
  * Standalone widget for embedding voice recording in surveys (Alchemer, etc.)
  *
- * Usage (two methods):
+ * Usage — Alchemer JavaScript Action (recommended):
+ *   Paste this JS in the JavaScript Action field:
  *
- * Method 1 — div + script (recommended):
- *   <div id="genius-voice"
- *        data-project="proj_xxx"
- *        data-session="SESSION_ID"
- *        data-question="q1"
- *        data-lang="es"
- *        data-max-duration="120">
- *   </div>
+ *   var c=document.createElement('div');
+ *   c.dataset.project='proj_xxx';
+ *   c.dataset.session='SESSION_ID';
+ *   c.dataset.question='q1';
+ *   c.dataset.lang='es';
+ *   var s=document.scripts;
+ *   s[s.length-1].parentNode.appendChild(c);
+ *   if(window.GeniusVoice){GeniusVoice.init(c)}
+ *   else{var j=document.createElement('script');
+ *   j.src='https://voice-capture-api-production.up.railway.app/voice.js';
+ *   document.head.appendChild(j)}
+ *
+ * Usage — HTML embed (generic platforms):
+ *   <div id="genius-voice" data-project="proj_xxx" data-session="SESSION_ID"
+ *        data-question="q1" data-lang="es"></div>
  *   <script src="https://voice-capture-api-production.up.railway.app/voice.js"></script>
- *
- * Method 2 — script-only (auto-creates container, ideal for Alchemer JS actions):
- *   <script src="https://voice-capture-api-production.up.railway.app/voice.js"
- *           data-project="proj_xxx"
- *           data-session="SESSION_ID"
- *           data-question="q1"
- *           data-lang="es"></script>
  */
 (function () {
     'use strict';
@@ -27,57 +28,53 @@
     // Capture script reference immediately (before any async)
     var scriptTag = document.currentScript;
 
-    function init() {
-        // 1. Try to find existing container by ID
-        var container = document.getElementById('genius-voice');
+    /**
+     * Initialize a single container element as a widget.
+     * Can be called externally via window.GeniusVoice.init(el)
+     */
+    function initContainer(container) {
+        if (!container || !container.dataset) return;
+        if (container.dataset.gvInit === '1') return; // already initialized
+        if (!container.dataset.project) {
+            console.warn('[GeniusVoice] Container missing data-project attribute');
+            return;
+        }
+        container.dataset.gvInit = '1';
+        initWidget(container);
+    }
 
-        // 2. If not found, look for any element with a data-project starting with "proj_"
-        if (!container) {
-            var candidates = document.querySelectorAll('[data-project^="proj_"]');
-            for (var i = 0; i < candidates.length; i++) {
-                if (candidates[i].tagName !== 'SCRIPT' && !candidates[i].dataset.gvInit) {
-                    container = candidates[i];
-                    break;
-                }
-            }
+    /**
+     * Scan the page for all uninitialized containers and init them.
+     * Called on first load and can be called externally via window.GeniusVoice.scan()
+     */
+    function scanAndInit() {
+        // Find all elements with data-project (excluding script tags and already-init'd)
+        var containers = document.querySelectorAll('[data-project^="proj_"]:not(script):not([data-gv-init="1"])');
+        for (var i = 0; i < containers.length; i++) {
+            initContainer(containers[i]);
         }
 
-        // 3. Still not found — auto-create container from script tag attributes
-        if (!container && scriptTag && scriptTag.dataset.project) {
-            container = document.createElement('div');
-            container.id = 'genius-voice';
-            // Copy data attributes from script tag
+        // If nothing found and we have a script tag with data-project, auto-create
+        if (containers.length === 0 && scriptTag && scriptTag.dataset.project) {
+            var container = document.createElement('div');
             var attrs = ['project', 'session', 'question', 'lang', 'maxDuration', 'api'];
             for (var j = 0; j < attrs.length; j++) {
                 if (scriptTag.dataset[attrs[j]]) {
                     container.dataset[attrs[j]] = scriptTag.dataset[attrs[j]];
                 }
             }
-            scriptTag.parentNode.insertBefore(container, scriptTag);
+            if (scriptTag.parentNode) {
+                scriptTag.parentNode.insertBefore(container, scriptTag);
+                initContainer(container);
+            }
         }
-
-        // 4. Still nothing — create an empty container next to script tag
-        if (!container && scriptTag && scriptTag.parentNode) {
-            container = document.createElement('div');
-            container.id = 'genius-voice';
-            scriptTag.parentNode.insertBefore(container, scriptTag);
-            // No data-project means we can't operate — show a helpful warning
-            console.warn('[GeniusVoice] No container or data-project found. Widget will not render.');
-            console.warn('[GeniusVoice] Add data-project="proj_xxx" to the <div> or <script> tag.');
-            return;
-        }
-
-        if (!container) {
-            console.warn('[GeniusVoice] Could not find or create a container element.');
-            return;
-        }
-
-        // Prevent double-init on same container
-        if (container.dataset.gvInit === '1') return;
-        container.dataset.gvInit = '1';
-
-        initWidget(container);
     }
+
+    // Expose global API for dynamic loading (Alchemer JS Actions)
+    window.GeniusVoice = {
+        init: initContainer,
+        scan: scanAndInit
+    };
 
     function initWidget(container) {
         var projectKey = container.dataset.project;
@@ -454,10 +451,10 @@
         ].join('\n');
     }
 
-    // --- Bootstrap: wait for DOM if needed, then init ---
+    // --- Bootstrap: wait for DOM if needed, then scan all containers ---
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', scanAndInit);
     } else {
-        init();
+        scanAndInit();
     }
 })();
