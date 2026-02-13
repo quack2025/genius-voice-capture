@@ -20,7 +20,12 @@ const path = require('path');
 const app = express();
 
 // Security middleware
-app.use(helmet());
+// Allow cross-origin loading of voice.js widget from external survey pages
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false
+}));
 
 // CORS configuration
 function isOriginAllowed(origin) {

@@ -1,298 +1,365 @@
 /**
- * Genius Voice Capture Widget v1.0
+ * Genius Voice Capture Widget v1.1
  * Standalone widget for embedding voice recording in surveys (Alchemer, etc.)
  *
- * Usage:
+ * Usage (two methods):
+ *
+ * Method 1 — div + script (recommended):
  *   <div id="genius-voice"
  *        data-project="proj_xxx"
  *        data-session="SESSION_ID"
  *        data-question="q1"
  *        data-lang="es"
- *        data-max-duration="120"
- *        data-api="https://voice-capture-api-production.up.railway.app">
+ *        data-max-duration="120">
  *   </div>
  *   <script src="https://voice-capture-api-production.up.railway.app/voice.js"></script>
+ *
+ * Method 2 — script-only (auto-creates container, ideal for Alchemer JS actions):
+ *   <script src="https://voice-capture-api-production.up.railway.app/voice.js"
+ *           data-project="proj_xxx"
+ *           data-session="SESSION_ID"
+ *           data-question="q1"
+ *           data-lang="es"></script>
  */
 (function () {
     'use strict';
 
-    // --- Find container ---
-    var container = document.getElementById('genius-voice');
-    if (!container) return;
+    // Capture script reference immediately (before any async)
+    var scriptTag = document.currentScript;
 
-    var projectKey = container.dataset.project;
-    if (!projectKey) { console.error('[GeniusVoice] Missing data-project attribute'); return; }
+    function init() {
+        // 1. Try to find existing container by ID
+        var container = document.getElementById('genius-voice');
 
-    var sessionId = container.dataset.session || getSessionFromUrl() || generateFallbackId();
-    var questionId = container.dataset.question || null;
-    var maxDuration = parseInt(container.dataset.maxDuration, 10) || 120;
-    var lang = container.dataset.lang || 'es';
-    var apiUrl = container.dataset.api || getScriptOrigin() || 'https://voice-capture-api-production.up.railway.app';
-
-    // --- i18n ---
-    var texts = {
-        es: {
-            record: 'Grabar respuesta',
-            stop: 'Detener',
-            recording: 'Grabando...',
-            transcribing: 'Transcribiendo...',
-            transcribingLong: 'Procesando, un momento...',
-            success: 'Respuesta guardada',
-            error: 'Error al transcribir',
-            retry: 'Intentar de nuevo',
-            rerecord: 'Grabar de nuevo',
-            permissionDenied: 'Se necesita acceso al micr\u00f3fono',
-            notSupported: 'Tu navegador no soporta grabaci\u00f3n de audio',
-            maxReached: 'Duraci\u00f3n m\u00e1xima alcanzada'
-        },
-        en: {
-            record: 'Record answer',
-            stop: 'Stop',
-            recording: 'Recording...',
-            transcribing: 'Transcribing...',
-            transcribingLong: 'Processing, one moment...',
-            success: 'Answer saved',
-            error: 'Transcription error',
-            retry: 'Try again',
-            rerecord: 'Record again',
-            permissionDenied: 'Microphone access required',
-            notSupported: 'Your browser does not support audio recording',
-            maxReached: 'Maximum duration reached'
-        },
-        pt: {
-            record: 'Gravar resposta',
-            stop: 'Parar',
-            recording: 'Gravando...',
-            transcribing: 'Transcrevendo...',
-            transcribingLong: 'Processando, um momento...',
-            success: 'Resposta salva',
-            error: 'Erro na transcri\u00e7\u00e3o',
-            retry: 'Tentar novamente',
-            rerecord: 'Gravar novamente',
-            permissionDenied: '\u00c9 necess\u00e1rio acesso ao microfone',
-            notSupported: 'Seu navegador n\u00e3o suporta grava\u00e7\u00e3o de \u00e1udio',
-            maxReached: 'Dura\u00e7\u00e3o m\u00e1xima atingida'
+        // 2. If not found, look for any element with a data-project starting with "proj_"
+        if (!container) {
+            var candidates = document.querySelectorAll('[data-project^="proj_"]');
+            for (var i = 0; i < candidates.length; i++) {
+                if (candidates[i].tagName !== 'SCRIPT' && !candidates[i].dataset.gvInit) {
+                    container = candidates[i];
+                    break;
+                }
+            }
         }
-    };
-    var t = texts[lang] || texts.es;
 
-    // --- State ---
-    var state = 'idle'; // idle | recording | uploading | success | error
-    var mediaRecorder = null;
-    var audioChunks = [];
-    var timerInterval = null;
-    var seconds = 0;
-    var transcriptionText = '';
-    var errorMsg = '';
-
-    // --- Shadow DOM ---
-    var shadow = container.attachShadow({ mode: 'closed' });
-
-    var styleEl = document.createElement('style');
-    styleEl.textContent = getStyles();
-    shadow.appendChild(styleEl);
-
-    var wrapper = document.createElement('div');
-    wrapper.className = 'gv-widget';
-    shadow.appendChild(wrapper);
-
-    // --- Render ---
-    function render() {
-        wrapper.innerHTML = '';
-        switch (state) {
-            case 'idle': renderIdle(); break;
-            case 'recording': renderRecording(); break;
-            case 'uploading': renderUploading(); break;
-            case 'success': renderSuccess(); break;
-            case 'error': renderError(); break;
+        // 3. Still not found — auto-create container from script tag attributes
+        if (!container && scriptTag && scriptTag.dataset.project) {
+            container = document.createElement('div');
+            container.id = 'genius-voice';
+            // Copy data attributes from script tag
+            var attrs = ['project', 'session', 'question', 'lang', 'maxDuration', 'api'];
+            for (var j = 0; j < attrs.length; j++) {
+                if (scriptTag.dataset[attrs[j]]) {
+                    container.dataset[attrs[j]] = scriptTag.dataset[attrs[j]];
+                }
+            }
+            scriptTag.parentNode.insertBefore(container, scriptTag);
         }
-    }
 
-    function renderIdle() {
-        // Check browser support (includes MediaRecorder for iOS Safari <14.6)
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
-            var msg = el('div', { className: 'gv-msg gv-error-msg' });
-            msg.textContent = t.notSupported;
-            wrapper.appendChild(msg);
+        // 4. Still nothing — create an empty container next to script tag
+        if (!container && scriptTag && scriptTag.parentNode) {
+            container = document.createElement('div');
+            container.id = 'genius-voice';
+            scriptTag.parentNode.insertBefore(container, scriptTag);
+            // No data-project means we can't operate — show a helpful warning
+            console.warn('[GeniusVoice] No container or data-project found. Widget will not render.');
+            console.warn('[GeniusVoice] Add data-project="proj_xxx" to the <div> or <script> tag.');
             return;
         }
-        var btn = el('button', { className: 'gv-btn gv-btn-record', onclick: startRecording });
-        btn.innerHTML = micSvg() + ' <span>' + t.record + '</span>';
-        wrapper.appendChild(btn);
-    }
 
-    function renderRecording() {
-        var top = el('div', { className: 'gv-recording-indicator' });
-        top.innerHTML = '<span class="gv-pulse"></span> <span class="gv-timer">' + formatTime(seconds) + '</span>';
-        wrapper.appendChild(top);
-
-        var btn = el('button', { className: 'gv-btn gv-btn-stop', onclick: stopRecording });
-        btn.innerHTML = stopSvg() + ' <span>' + t.stop + '</span>';
-        wrapper.appendChild(btn);
-    }
-
-    function renderUploading() {
-        var msg = seconds > 15 ? t.transcribingLong : t.transcribing;
-        wrapper.innerHTML = '<div class="gv-uploading"><div class="gv-spinner"></div><span>' + msg + '</span></div>';
-    }
-
-    function renderSuccess() {
-        var check = el('div', { className: 'gv-success-icon' });
-        check.innerHTML = checkSvg();
-        wrapper.appendChild(check);
-
-        var msgEl = el('div', { className: 'gv-msg gv-success-msg' });
-        msgEl.textContent = t.success;
-        wrapper.appendChild(msgEl);
-
-        if (transcriptionText) {
-            var preview = el('div', { className: 'gv-preview' });
-            preview.textContent = transcriptionText.length > 200
-                ? transcriptionText.substring(0, 200) + '...'
-                : transcriptionText;
-            wrapper.appendChild(preview);
+        if (!container) {
+            console.warn('[GeniusVoice] Could not find or create a container element.');
+            return;
         }
 
-        var btn = el('button', { className: 'gv-btn gv-btn-secondary', onclick: resetWidget });
-        btn.textContent = t.rerecord;
-        wrapper.appendChild(btn);
+        // Prevent double-init on same container
+        if (container.dataset.gvInit === '1') return;
+        container.dataset.gvInit = '1';
+
+        initWidget(container);
     }
 
-    function renderError() {
-        var msgEl = el('div', { className: 'gv-msg gv-error-msg' });
-        msgEl.textContent = errorMsg || t.error;
-        wrapper.appendChild(msgEl);
-        var btn = el('button', { className: 'gv-btn gv-btn-retry', onclick: resetWidget });
-        btn.textContent = t.retry;
-        wrapper.appendChild(btn);
-    }
+    function initWidget(container) {
+        var projectKey = container.dataset.project;
+        if (!projectKey) {
+            console.error('[GeniusVoice] Missing data-project attribute');
+            return;
+        }
 
-    // --- Recording logic ---
-    function startRecording() {
-        if (state !== 'idle') return; // Guard against double-click
-        state = 'recording'; // Set immediately to prevent race
-        navigator.mediaDevices.getUserMedia({ audio: true })
-            .then(function (stream) {
-                var mimeType = getMimeType();
-                var options = mimeType ? { mimeType: mimeType } : {};
+        var sessionId = container.dataset.session || getSessionFromUrl() || generateFallbackId();
+        var questionId = container.dataset.question || null;
+        var maxDuration = parseInt(container.dataset.maxDuration, 10) || 120;
+        var lang = container.dataset.lang || 'es';
+        var apiUrl = container.dataset.api || getScriptOrigin() || 'https://voice-capture-api-production.up.railway.app';
 
-                mediaRecorder = new MediaRecorder(stream, options);
-                audioChunks = [];
-                seconds = 0;
+        // --- i18n ---
+        var texts = {
+            es: {
+                record: 'Grabar respuesta',
+                stop: 'Detener',
+                recording: 'Grabando...',
+                transcribing: 'Transcribiendo...',
+                transcribingLong: 'Procesando, un momento...',
+                success: 'Respuesta guardada',
+                error: 'Error al transcribir',
+                retry: 'Intentar de nuevo',
+                rerecord: 'Grabar de nuevo',
+                permissionDenied: 'Se necesita acceso al micr\u00f3fono',
+                notSupported: 'Tu navegador no soporta grabaci\u00f3n de audio',
+                maxReached: 'Duraci\u00f3n m\u00e1xima alcanzada'
+            },
+            en: {
+                record: 'Record answer',
+                stop: 'Stop',
+                recording: 'Recording...',
+                transcribing: 'Transcribing...',
+                transcribingLong: 'Processing, one moment...',
+                success: 'Answer saved',
+                error: 'Transcription error',
+                retry: 'Try again',
+                rerecord: 'Record again',
+                permissionDenied: 'Microphone access required',
+                notSupported: 'Your browser does not support audio recording',
+                maxReached: 'Maximum duration reached'
+            },
+            pt: {
+                record: 'Gravar resposta',
+                stop: 'Parar',
+                recording: 'Gravando...',
+                transcribing: 'Transcrevendo...',
+                transcribingLong: 'Processando, um momento...',
+                success: 'Resposta salva',
+                error: 'Erro na transcri\u00e7\u00e3o',
+                retry: 'Tentar novamente',
+                rerecord: 'Gravar novamente',
+                permissionDenied: '\u00c9 necess\u00e1rio acesso ao microfone',
+                notSupported: 'Seu navegador n\u00e3o suporta grava\u00e7\u00e3o de \u00e1udio',
+                maxReached: 'Dura\u00e7\u00e3o m\u00e1xima atingida'
+            }
+        };
+        var t = texts[lang] || texts.es;
 
-                mediaRecorder.ondataavailable = function (e) {
-                    if (e.data.size > 0) audioChunks.push(e.data);
-                };
+        // --- State ---
+        var state = 'idle'; // idle | recording | uploading | success | error
+        var mediaRecorder = null;
+        var audioChunks = [];
+        var timerInterval = null;
+        var seconds = 0;
+        var transcriptionText = '';
+        var errorMsg = '';
 
-                mediaRecorder.onstop = function () {
-                    stream.getTracks().forEach(function (track) { track.stop(); });
-                    var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-                    uploadAudio(blob);
-                };
+        // --- Shadow DOM ---
+        var shadow = container.attachShadow({ mode: 'closed' });
 
-                mediaRecorder.start(1000);
+        var styleEl = document.createElement('style');
+        styleEl.textContent = getStyles();
+        shadow.appendChild(styleEl);
 
-                timerInterval = setInterval(function () {
-                    seconds++;
-                    if (seconds >= maxDuration) {
-                        stopRecording();
-                        // Show brief max-reached notice in uploading state
-                        var notice = wrapper.querySelector('.gv-uploading span');
-                        if (notice) notice.textContent = t.maxReached;
-                        return;
-                    }
-                    var timerEl = wrapper.querySelector('.gv-timer');
-                    if (timerEl) timerEl.textContent = formatTime(seconds);
-                }, 1000);
+        var wrapper = document.createElement('div');
+        wrapper.className = 'gv-widget';
+        shadow.appendChild(wrapper);
 
+        // --- Render ---
+        function render() {
+            wrapper.innerHTML = '';
+            switch (state) {
+                case 'idle': renderIdle(); break;
+                case 'recording': renderRecording(); break;
+                case 'uploading': renderUploading(); break;
+                case 'success': renderSuccess(); break;
+                case 'error': renderError(); break;
+            }
+        }
+
+        function renderIdle() {
+            // Check browser support (includes MediaRecorder for iOS Safari <14.6)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                var msg = el('div', { className: 'gv-msg gv-error-msg' });
+                msg.textContent = t.notSupported;
+                wrapper.appendChild(msg);
+                return;
+            }
+            var btn = el('button', { className: 'gv-btn gv-btn-record', onclick: startRecording });
+            btn.innerHTML = micSvg() + ' <span>' + t.record + '</span>';
+            wrapper.appendChild(btn);
+        }
+
+        function renderRecording() {
+            var top = el('div', { className: 'gv-recording-indicator' });
+            top.innerHTML = '<span class="gv-pulse"></span> <span class="gv-timer">' + formatTime(seconds) + '</span>';
+            wrapper.appendChild(top);
+
+            var btn = el('button', { className: 'gv-btn gv-btn-stop', onclick: stopRecording });
+            btn.innerHTML = stopSvg() + ' <span>' + t.stop + '</span>';
+            wrapper.appendChild(btn);
+        }
+
+        function renderUploading() {
+            var msg = seconds > 15 ? t.transcribingLong : t.transcribing;
+            wrapper.innerHTML = '<div class="gv-uploading"><div class="gv-spinner"></div><span>' + msg + '</span></div>';
+        }
+
+        function renderSuccess() {
+            var check = el('div', { className: 'gv-success-icon' });
+            check.innerHTML = checkSvg();
+            wrapper.appendChild(check);
+
+            var msgEl = el('div', { className: 'gv-msg gv-success-msg' });
+            msgEl.textContent = t.success;
+            wrapper.appendChild(msgEl);
+
+            if (transcriptionText) {
+                var preview = el('div', { className: 'gv-preview' });
+                preview.textContent = transcriptionText.length > 200
+                    ? transcriptionText.substring(0, 200) + '...'
+                    : transcriptionText;
+                wrapper.appendChild(preview);
+            }
+
+            var btn = el('button', { className: 'gv-btn gv-btn-secondary', onclick: resetWidget });
+            btn.textContent = t.rerecord;
+            wrapper.appendChild(btn);
+        }
+
+        function renderError() {
+            var msgEl = el('div', { className: 'gv-msg gv-error-msg' });
+            msgEl.textContent = errorMsg || t.error;
+            wrapper.appendChild(msgEl);
+            var btn = el('button', { className: 'gv-btn gv-btn-retry', onclick: resetWidget });
+            btn.textContent = t.retry;
+            wrapper.appendChild(btn);
+        }
+
+        // --- Recording logic ---
+        function startRecording() {
+            if (state !== 'idle') return; // Guard against double-click
+            state = 'recording'; // Set immediately to prevent race
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function (stream) {
+                    var mimeType = getMimeType();
+                    var options = mimeType ? { mimeType: mimeType } : {};
+
+                    mediaRecorder = new MediaRecorder(stream, options);
+                    audioChunks = [];
+                    seconds = 0;
+
+                    mediaRecorder.ondataavailable = function (e) {
+                        if (e.data.size > 0) audioChunks.push(e.data);
+                    };
+
+                    mediaRecorder.onstop = function () {
+                        stream.getTracks().forEach(function (track) { track.stop(); });
+                        var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                        uploadAudio(blob);
+                    };
+
+                    mediaRecorder.start(1000);
+
+                    timerInterval = setInterval(function () {
+                        seconds++;
+                        if (seconds >= maxDuration) {
+                            stopRecording();
+                            // Show brief max-reached notice in uploading state
+                            var notice = wrapper.querySelector('.gv-uploading span');
+                            if (notice) notice.textContent = t.maxReached;
+                            return;
+                        }
+                        var timerEl = wrapper.querySelector('.gv-timer');
+                        if (timerEl) timerEl.textContent = formatTime(seconds);
+                    }, 1000);
+
+                    render();
+                })
+                .catch(function (err) {
+                    errorMsg = (err && err.name === 'NotFoundError')
+                        ? t.notSupported   // No microphone hardware
+                        : t.permissionDenied;
+                    state = 'error';
+                    render();
+                });
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                clearInterval(timerInterval);
+                mediaRecorder.stop();
+                state = 'uploading';
+                render();
+            }
+        }
+
+        // --- Upload ---
+        function uploadAudio(blob) {
+            var ext = blob.type.indexOf('webm') !== -1 ? 'webm'
+                : blob.type.indexOf('mp4') !== -1 ? 'mp4'
+                : 'webm';
+
+            var formData = new FormData();
+            formData.append('audio', blob, 'recording.' + ext);
+            formData.append('session_id', sessionId);
+            if (questionId) formData.append('question_id', questionId);
+            formData.append('duration_seconds', String(seconds));
+
+            // Show "processing" message after 15s
+            var longTimer = setTimeout(function () {
+                if (state === 'uploading') render();
+            }, 15000);
+
+            // Abort fetch after 120s to prevent indefinite hang
+            var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            var fetchTimeout = setTimeout(function () {
+                if (controller) controller.abort();
+            }, 120000);
+
+            fetch(apiUrl + '/api/transcribe', {
+                method: 'POST',
+                headers: { 'x-project-key': projectKey },
+                body: formData,
+                signal: controller ? controller.signal : undefined
+            })
+            .then(function (response) {
+                if (!response.ok) throw new Error('Server error: ' + response.status);
+                return response.json();
+            })
+            .then(function (data) {
+                clearTimeout(fetchTimeout);
+                clearTimeout(longTimer);
+                if (data.success && data.status === 'completed') {
+                    transcriptionText = data.transcription || '';
+                    state = 'success';
+                } else {
+                    errorMsg = data.error || t.error;
+                    state = 'error';
+                }
                 render();
             })
-            .catch(function (err) {
-                errorMsg = (err && err.name === 'NotFoundError')
-                    ? t.notSupported   // No microphone hardware
-                    : t.permissionDenied;
+            .catch(function () {
+                clearTimeout(longTimer);
+                clearTimeout(fetchTimeout);
+                errorMsg = t.error;
                 state = 'error';
                 render();
             });
-    }
+        }
 
-    function stopRecording() {
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
+        function resetWidget() {
             clearInterval(timerInterval);
-            mediaRecorder.stop();
-            state = 'uploading';
-            render();
-        }
-    }
-
-    // --- Upload ---
-    function uploadAudio(blob) {
-        var ext = blob.type.indexOf('webm') !== -1 ? 'webm'
-            : blob.type.indexOf('mp4') !== -1 ? 'mp4'
-            : 'webm';
-
-        var formData = new FormData();
-        formData.append('audio', blob, 'recording.' + ext);
-        formData.append('session_id', sessionId);
-        if (questionId) formData.append('question_id', questionId);
-        formData.append('duration_seconds', String(seconds));
-
-        // Show "processing" message after 15s
-        var longTimer = setTimeout(function () {
-            if (state === 'uploading') render();
-        }, 15000);
-
-        // Abort fetch after 120s to prevent indefinite hang
-        var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        var fetchTimeout = setTimeout(function () {
-            if (controller) controller.abort();
-        }, 120000);
-
-        fetch(apiUrl + '/api/transcribe', {
-            method: 'POST',
-            headers: { 'x-project-key': projectKey },
-            body: formData,
-            signal: controller ? controller.signal : undefined
-        })
-        .then(function (response) {
-            if (!response.ok) throw new Error('Server error: ' + response.status);
-            return response.json();
-        })
-        .then(function (data) {
-            clearTimeout(fetchTimeout);
-            clearTimeout(longTimer);
-            if (data.success && data.status === 'completed') {
-                transcriptionText = data.transcription || '';
-                state = 'success';
-            } else {
-                errorMsg = data.error || t.error;
-                state = 'error';
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                try { mediaRecorder.stop(); } catch (e) { /* ignore */ }
             }
+            mediaRecorder = null;
+            state = 'idle';
+            transcriptionText = '';
+            errorMsg = '';
+            seconds = 0;
             render();
-        })
-        .catch(function () {
-            clearTimeout(longTimer);
-            clearTimeout(fetchTimeout);
-            errorMsg = t.error;
-            state = 'error';
-            render();
-        });
-    }
-
-    function resetWidget() {
-        clearInterval(timerInterval);
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-            try { mediaRecorder.stop(); } catch (e) { /* ignore */ }
         }
-        mediaRecorder = null;
-        state = 'idle';
-        transcriptionText = '';
-        errorMsg = '';
-        seconds = 0;
+
+        // --- Initialize widget ---
         render();
     }
 
-    // --- Helpers ---
+    // --- Shared helpers (outside initWidget, no per-instance state) ---
     function getSessionFromUrl() {
         try {
             var params = new URLSearchParams(window.location.search);
@@ -387,6 +454,10 @@
         ].join('\n');
     }
 
-    // --- Initialize ---
-    render();
+    // --- Bootstrap: wait for DOM if needed, then init ---
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
