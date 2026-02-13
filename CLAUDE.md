@@ -1,33 +1,48 @@
 # Voice Capture API - Contexto para Claude
 
-## Descripción
+## Descripcion
 
-Backend API para capturar respuestas de audio en encuestas y transcribirlas automáticamente con OpenAI Whisper.
+Backend API para capturar respuestas de audio en encuestas Alchemer y transcribirlas automaticamente con OpenAI Whisper. Incluye un widget embebible (`voice.js`) que graba audio y lo envia al backend para transcripcion inmediata.
 
 **Parte de:** Genius Labs AI Suite
 
-## URLs Importantes
+## Arquitectura: Transcripcion Inmediata
+
+```
+Widget (voice.js) --POST /api/transcribe--> Backend --Whisper API--> DB (solo texto)
+                                                |
+                                                v (si Whisper falla 3x)
+                                          Supabase Storage (fallback)
+```
+
+- El audio se procesa en memoria (buffer), no se almacena
+- Solo se guarda la transcripcion en la BD
+- Si Whisper falla 3 veces, el audio se sube a Storage como fallback (status: failed)
+- Recordings con fallback se pueden retranscribir desde el dashboard
+
+## URLs
 
 | Servicio | URL |
 |----------|-----|
-| **API Producción** | https://voice-capture-api-production.up.railway.app |
+| **API Produccion** | https://voice-capture-api-production.up.railway.app |
 | Supabase | https://hggwsdqjkwydiubhvrvq.supabase.co |
 | GitHub (Backend) | https://github.com/quack2025/genius-voice-capture |
 | GitHub (Frontend) | https://github.com/quack2025/genius-voice-dashboard |
 
 ---
 
-## Stack Tecnológico
+## Stack
 
-| Componente | Tecnología |
+| Componente | Tecnologia |
 |------------|------------|
 | Runtime | Node.js 20+ |
 | Framework | Express.js 4.x |
 | Base de datos | Supabase PostgreSQL |
-| Autenticación | Supabase Auth (JWT) |
-| Storage | Supabase Storage |
-| Transcripción | OpenAI Whisper API |
-| Validación | Zod |
+| Auth (Dashboard) | Supabase Auth (JWT) |
+| Auth (Widget) | x-project-key header |
+| Storage | Supabase Storage (solo fallback) |
+| Transcripcion | OpenAI Whisper API (whisper-1) |
+| Validacion | Zod |
 | Testing | Jest + Supertest |
 
 ---
@@ -36,46 +51,52 @@ Backend API para capturar respuestas de audio en encuestas y transcribirlas auto
 
 ```
 src/
-├── index.js                 # Entry point Express
+├── index.js                      # Entry point Express + static files
 ├── config/
-│   ├── index.js             # Variables de entorno
-│   ├── supabase.js          # Clientes Supabase (admin + anon)
-│   └── openai.js            # Cliente OpenAI
+│   ├── index.js                  # Variables de entorno
+│   ├── supabase.js               # Clientes Supabase (admin + anon)
+│   └── openai.js                 # Cliente OpenAI
 ├── middleware/
-│   ├── auth.js              # Validación JWT
-│   ├── projectKey.js        # Validación x-project-key
-│   └── errorHandler.js      # Manejo global de errores
+│   ├── auth.js                   # Validacion JWT (dashboard)
+│   ├── projectKey.js             # Validacion x-project-key (widget)
+│   └── errorHandler.js           # Manejo global de errores
 ├── routes/
-│   ├── upload.js            # POST /api/upload (widget)
-│   ├── projects.js          # CRUD proyectos
-│   ├── recordings.js        # Lista grabaciones
-│   ├── transcribe.js        # Batch transcription
-│   └── export.js            # Export CSV
+│   ├── transcribeImmediate.js    # POST /api/transcribe (principal)
+│   ├── upload.js                 # POST /api/upload (legacy)
+│   ├── projects.js               # CRUD proyectos
+│   ├── recordings.js             # Lista grabaciones + retranscribe
+│   ├── transcribe.js             # Batch transcription (legacy)
+│   └── export.js                 # Export CSV streaming
 ├── services/
-│   ├── whisper.js           # Integración OpenAI Whisper
-│   ├── storage.js           # Supabase Storage
-│   └── transcriptionQueue.js # Procesamiento de cola
+│   ├── whisper.js                # transcribeFromBuffer + transcribeAudio
+│   ├── storage.js                # Supabase Storage (fallback)
+│   └── transcriptionQueue.js     # Cola sync para retranscribe
 ├── validators/
-│   └── schemas.js           # Esquemas Zod
+│   └── schemas.js                # Esquemas Zod
 └── utils/
-    ├── generateId.js        # Generación de IDs
-    └── csvParser.js         # Conversión a CSV
+    ├── generateId.js
+    └── csvParser.js
+
+public/
+└── voice.js                      # Widget embebible standalone
 ```
 
 ---
 
 ## API Endpoints
 
-### Públicos (Widget)
+### Widget (sin auth JWT)
 
-| Método | Ruta | Auth | Descripción |
+| Metodo | Ruta | Auth | Descripcion |
 |--------|------|------|-------------|
 | GET | `/health` | - | Health check |
-| POST | `/api/upload` | x-project-key | Widget sube audio |
+| GET | `/voice.js` | - | Widget embebible (static) |
+| **POST** | **`/api/transcribe`** | **x-project-key** | **Transcripcion inmediata desde buffer** |
+| POST | `/api/upload` | x-project-key | Upload legacy (almacena audio) |
 
-### Protegidos (Dashboard - JWT)
+### Dashboard (JWT)
 
-| Método | Ruta | Descripción |
+| Metodo | Ruta | Descripcion |
 |--------|------|-------------|
 | GET | `/api/projects` | Listar proyectos del usuario |
 | POST | `/api/projects` | Crear proyecto |
@@ -83,12 +104,32 @@ src/
 | PUT | `/api/projects/:id` | Actualizar proyecto |
 | DELETE | `/api/projects/:id` | Eliminar proyecto + audios |
 | GET | `/api/projects/:id/recordings` | Listar grabaciones (paginado) |
-| POST | `/api/projects/:id/recordings/:rid/retranscribe` | Re-transcribir |
-| POST | `/api/projects/:id/transcribe-batch` | Preparar batch (preview) |
-| GET | `/api/projects/:id/transcribe-batch/:bid` | Estado del batch |
-| POST | `/api/projects/:id/transcribe-batch/:bid/confirm` | Ejecutar batch |
-| POST | `/api/projects/:id/transcribe-batch/:bid/cancel` | Cancelar batch |
-| GET | `/api/projects/:id/export` | Exportar CSV |
+| GET | `/api/projects/:id/recordings/:rid` | Detalle grabacion |
+| POST | `/api/projects/:id/recordings/:rid/retranscribe` | Re-transcribir (requiere audio_path) |
+| GET | `/api/projects/:id/export` | Exportar CSV streaming |
+
+### Legacy (activos pero sin uso)
+
+| Metodo | Ruta | Descripcion |
+|--------|------|-------------|
+| POST | `/api/projects/:id/transcribe-batch` | Batch transcription |
+| POST | `/api/projects/:id/transcribe-batch/:bid/confirm` | Confirmar batch |
+| GET | `/api/projects/:id/transcribe-batch/:bid` | Status batch |
+
+---
+
+## Flujo Principal: POST /api/transcribe
+
+```
+1. Widget envia audio (multipart/form-data) + x-project-key
+2. Backend valida project key
+3. transcribeFromBuffer(audioBuffer, extension, language)
+   - 3 reintentos con backoff exponencial
+   - Timeout 60s por intento
+4A. EXITO: INSERT recording con audio_path=null, status='completed', transcription=text
+4B. FALLO: Upload audio a Storage, INSERT con status='failed', audio_path=ruta
+5. Response: { success, recording_id, status, transcription }
+```
 
 ---
 
@@ -97,11 +138,11 @@ src/
 ### projects
 ```sql
 id (UUID, PK)
-user_id (UUID) → auth.users
+user_id (UUID) -> auth.users
 name (VARCHAR 255)
 public_key (VARCHAR 50) -- proj_xxx para widget
 language (VARCHAR 5) -- 'es', 'en', 'pt'
-transcription_mode (VARCHAR 20) -- 'realtime' | 'batch'
+transcription_mode (VARCHAR 20) -- siempre 'realtime'
 settings (JSONB)
 created_at, updated_at (TIMESTAMPTZ)
 ```
@@ -109,10 +150,10 @@ created_at, updated_at (TIMESTAMPTZ)
 ### recordings
 ```sql
 id (UUID, PK)
-project_id (UUID) → projects
-session_id (VARCHAR 100) -- ID de Alchemer
+project_id (UUID) -> projects
+session_id (VARCHAR 100)
 question_id (VARCHAR 50)
-audio_path (TEXT) -- path en Storage
+audio_path (TEXT, NULLABLE) -- null = transcripcion exitosa, ruta = fallback
 audio_size_bytes (INTEGER)
 duration_seconds (INTEGER)
 transcription (TEXT)
@@ -121,68 +162,49 @@ language_detected (VARCHAR 5)
 status (VARCHAR 20) -- pending|processing|completed|failed
 error_message (TEXT)
 metadata (JSONB)
-batch_id (UUID) → transcription_batches
+batch_id (UUID, NULLABLE)
 created_at, transcribed_at (TIMESTAMPTZ)
 ```
 
-### transcription_batches
-```sql
-id (UUID, PK)
-project_id (UUID) → projects
-user_id (UUID) → auth.users
-status (VARCHAR 30) -- pending_confirmation|processing|completed|partial|failed|cancelled
-total_recordings, completed_count, failed_count (INTEGER)
-estimated_cost_usd, actual_cost_usd (DECIMAL)
-session_ids_requested (TEXT[])
-session_ids_not_found (TEXT[])
-created_at, confirmed_at, completed_at (TIMESTAMPTZ)
-```
+**Importante:** `audio_path` es nullable. Recordings exitosos tienen `audio_path = null` (audio descartado). Solo los fallback tienen audio almacenado.
 
 ---
 
-## Flujos Principales
+## Widget voice.js
 
-### Upload de Audio (Widget)
-```
-Widget → POST /api/upload (x-project-key: proj_xxx)
-    → Validar project key
-    → Guardar audio en Supabase Storage
-    → Crear registro en recordings (status: pending)
-    → Si mode=realtime: encolar transcripción
-    → Response: { success, recording_id, session_id }
-```
+Widget standalone (IIFE, vanilla JS) para embeber en encuestas Alchemer:
 
-### Transcripción Batch
-```
-1. Frontend → POST /transcribe-batch (session_ids[])
-   → Backend analiza: encontrados, no encontrados, ya transcritos
-   → Response: { batch_id, summary, estimated_cost }
-
-2. Frontend → POST /transcribe-batch/:bid/confirm
-   → Backend inicia transcripción asíncrona
-   → Status: processing
-
-3. Frontend → GET /transcribe-batch/:bid (polling)
-   → Backend retorna progreso
-   → Cuando completa: status = completed|partial
-
-4. Para cada recording:
-   → Descargar audio de Storage
-   → Enviar a OpenAI Whisper
-   → Guardar transcripción en DB
-   → Actualizar status
+```html
+<div id="genius-voice"
+     data-project="proj_xxx"
+     data-session="[survey('session id')]"
+     data-lang="es"
+     data-max-duration="120">
+</div>
+<script src="https://voice-capture-api-production.up.railway.app/voice.js"></script>
 ```
 
-### Whisper Integration
+- Shadow DOM para aislamiento CSS
+- MediaRecorder API (WebM/Opus preferido, fallback MP4)
+- i18n interno (es/en/pt) via data-lang
+- Estados: idle -> recording -> uploading -> success -> error
+- Auto-detecta API URL desde script origin
+
+---
+
+## Whisper Service (whisper.js)
+
 ```javascript
-// services/whisper.js
-const transcription = await openai.audio.transcriptions.create({
-  file: audioFile,
-  model: 'whisper-1',
-  language: project.language, // es, en, pt
-  response_format: 'verbose_json'
-});
-// Costo: $0.006 USD por minuto
+// Transcripcion desde buffer (principal - sin almacenar audio)
+transcribeFromBuffer(audioBuffer, extension = 'webm', language = 'es')
+// -> { text, language, duration }
+
+// Transcripcion desde Storage (para retranscribe de fallbacks)
+transcribeAudio(audioPath, language = 'es')
+// -> Descarga de Storage, delega a transcribeFromBuffer
+
+// Retry: 3 intentos, backoff exponencial, timeout 60s
+// Costo: ~$0.006 USD por minuto de audio
 ```
 
 ---
@@ -190,33 +212,25 @@ const transcription = await openai.audio.transcriptions.create({
 ## Variables de Entorno
 
 ```env
-# Supabase
 SUPABASE_URL=https://hggwsdqjkwydiubhvrvq.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...  # Admin (bypass RLS)
 SUPABASE_ANON_KEY=eyJ...          # Solo para validar JWT
-
-# OpenAI
 OPENAI_API_KEY=sk-...
-
-# Server
 PORT=3000
 NODE_ENV=development
-
-# Límites
 MAX_AUDIO_SIZE_MB=10
 MAX_AUDIO_DURATION_SECONDS=180
 ```
 
 ---
 
-## Modos de Transcripción
+## Seguridad
 
-| Modo | Comportamiento |
-|------|----------------|
-| **realtime** | Audio sube → Transcribe inmediatamente |
-| **batch** | Audio sube → Guarda como pending → Usuario decide cuándo transcribir |
-
-Configurado por proyecto en `projects.transcription_mode`.
+- **CORS**: Whitelist de dominios (Alchemer, Lovable, localhost) + wildcard patterns
+- **Rate Limiting**: 100 req/15min upload/transcribe, 500 req/15min API
+- **Helmet**: Headers de seguridad
+- **RLS**: Todas las tablas con Row Level Security
+- **Service Role**: Backend usa service_role para operaciones del widget
 
 ---
 
@@ -226,65 +240,24 @@ Configurado por proyecto en `projects.transcription_mode`.
 npm install          # Instalar dependencias
 npm run dev          # Desarrollo (nodemon, puerto 3000)
 npm test             # Correr tests
-npm start            # Producción
+npm start            # Produccion
 ```
-
----
-
-## Relación con Frontend
-
-| Frontend | Backend |
-|----------|---------|
-| Dashboard React | Este repo (Express API) |
-| Supabase directo para lectura | Supabase para escritura + Storage |
-| batchApi.prepare() | POST /transcribe-batch |
-| batchApi.confirm() | POST /transcribe-batch/:bid/confirm |
-| batchApi.getStatus() | GET /transcribe-batch/:bid |
-| exportApi.exportCsv() | GET /export |
-
-El frontend usa JWT de Supabase Auth, que este backend valida.
-
----
-
-## Seguridad
-
-- **CORS**: Whitelist de dominios (Alchemer, Lovable, localhost)
-- **Rate Limiting**: 100 req/15min upload, 500 req/15min API
-- **Helmet**: Headers de seguridad
-- **Auth**: JWT validado por Supabase
-- **Project Key**: Previene spoofing del widget
-
----
-
-## Documentación Adicional
-
-| Archivo | Contenido |
-|---------|-----------|
-| `docs/PRODUCT_SPEC.md` | Visión de producto, flujos UX |
-| `docs/TECHNICAL_SPEC.md` | Detalles de endpoints, SQL |
-| `PROJECT_STATUS.md` | Estado del desarrollo |
-| `database/schema.sql` | Schema completo de BD |
 
 ---
 
 ## Deploy
 
-**Plataforma:** Railway
+**Plataforma:** Railway (auto-deploy por push a main)
 
-```bash
-# Deploy automático por push a main
-git push origin main
-
-# Variables configuradas en Railway Dashboard
-```
-
-**URL Producción:** https://voice-capture-api-production.up.railway.app
+**URL:** https://voice-capture-api-production.up.railway.app
 
 ---
 
-## Pendientes
+## Relacion con Frontend
 
-- [ ] XLSX export (actualmente retorna 501)
-- [ ] Migrar a cola asíncrona real (BullMQ)
-- [ ] Tests de integración completos
-- [ ] Widget voice.js para el snippet del frontend
+| Frontend | Backend |
+|----------|---------|
+| Dashboard React (Lovable) | Este repo (Express API en Railway) |
+| Supabase directo para lectura | Supabase para escritura + Storage (fallback) |
+| exportApi.exportCsv() | GET /export |
+| Supabase Auth JWT | Validado en middleware/auth.js |
