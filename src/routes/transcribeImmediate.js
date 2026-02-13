@@ -101,13 +101,23 @@ router.post('/',
             });
         }
 
-        // 5B. FALLBACK PATH: Whisper failed — store audio in Storage for later retry
-        const { path: audioPath, size: audioSize } = await uploadAudio(
-            req.file.buffer,
-            project.id,
-            session_id,
-            req.file.mimetype
-        );
+        // 5B. FALLBACK PATH: Whisper failed — try to store audio in Storage for later retry
+        let audioPath = null;
+        let audioSize = req.file.size;
+
+        try {
+            const uploadResult = await uploadAudio(
+                req.file.buffer,
+                project.id,
+                session_id,
+                req.file.mimetype
+            );
+            audioPath = uploadResult.path;
+            audioSize = uploadResult.size;
+        } catch (storageErr) {
+            console.error(`Storage fallback also failed for session ${session_id}:`, storageErr.message);
+            // Continue without audio — at least save the recording metadata
+        }
 
         const { data: recording, error: dbError } = await supabaseAdmin
             .from('recordings')
@@ -120,7 +130,9 @@ router.post('/',
                 duration_seconds: duration_seconds || null,
                 metadata: metadata || {},
                 status: 'failed',
-                error_message: `Whisper transcription failed: ${errorMessage}`
+                error_message: audioPath
+                    ? `Whisper transcription failed: ${errorMessage}`
+                    : `Whisper and Storage both failed: ${errorMessage}`
             })
             .select('id')
             .single();
@@ -133,7 +145,9 @@ router.post('/',
             success: true,
             recording_id: recording.id,
             status: 'failed',
-            error: 'Transcription failed. Audio saved for retry.'
+            error: audioPath
+                ? 'Transcription failed. Audio saved for retry.'
+                : 'Transcription failed. Please try again.'
         });
     })
 );

@@ -2,8 +2,6 @@ const { openai } = require('../config/openai');
 const { supabaseAdmin } = require('../config/supabase');
 const config = require('../config');
 
-const WHISPER_TIMEOUT_MS = 60000; // 60 seconds
-const MAX_RETRIES = 3;
 const VALID_LANGUAGES = ['es', 'en', 'pt', 'fr', 'de', 'it', 'ja', 'ko', 'zh'];
 
 /**
@@ -60,8 +58,11 @@ async function transcribeFromBuffer(audioBuffer, extension = 'webm', language = 
     const mimeType = getMimeType(extension);
     const audioFile = new File([audioBuffer], `audio.${extension}`, { type: mimeType });
 
+    const timeoutMs = config.whisperTimeoutMs || 30000;
+    const maxRetries = config.whisperMaxRetries || 2;
+
     let lastError;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const transcription = await Promise.race([
                 openai.audio.transcriptions.create({
@@ -71,7 +72,7 @@ async function transcribeFromBuffer(audioBuffer, extension = 'webm', language = 
                     response_format: 'verbose_json'
                 }),
                 new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Whisper API timeout')), WHISPER_TIMEOUT_MS)
+                    setTimeout(() => reject(new Error('Whisper API timeout')), timeoutMs)
                 )
             ]);
 
@@ -82,15 +83,15 @@ async function transcribeFromBuffer(audioBuffer, extension = 'webm', language = 
             };
         } catch (err) {
             lastError = err;
-            console.warn(`Whisper attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
+            console.warn(`Whisper attempt ${attempt}/${maxRetries} failed: ${err.message}`);
 
             // Don't retry on non-transient errors
             if (err.status === 400 || err.status === 401) {
                 throw err;
             }
 
-            if (attempt < MAX_RETRIES) {
-                const backoff = Math.pow(2, attempt) * 1000; // 2s, 4s
+            if (attempt < maxRetries) {
+                const backoff = Math.pow(2, attempt) * 1000 + Math.random() * 1000; // jitter
                 await sleep(backoff);
             }
         }

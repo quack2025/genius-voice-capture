@@ -24,8 +24,10 @@ const config = {
     // Signed URL expiration (1 hour)
     signedUrlExpiration: 3600,
 
-    // Whisper cost per minute (USD)
+    // Whisper transcription settings
     whisperCostPerMinute: 0.006,
+    whisperTimeoutMs: parseInt(process.env.WHISPER_TIMEOUT_MS, 10) || 30000,   // 30s default
+    whisperMaxRetries: parseInt(process.env.WHISPER_MAX_RETRIES, 10) || 2,     // 2 retries default
 
     // CORS origins
     allowedOrigins: [

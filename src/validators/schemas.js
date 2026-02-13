@@ -1,16 +1,19 @@
 const { z } = require('zod');
 
+// Languages supported by Whisper service
+const VALID_LANGUAGES = ['es', 'en', 'pt', 'fr', 'de', 'it', 'ja', 'ko', 'zh'];
+
 // Esquemas para Projects
 const createProjectSchema = z.object({
     name: z.string().min(1).max(255),
-    language: z.string().length(2).default('es'),
+    language: z.enum(VALID_LANGUAGES).default('es'),
     transcription_mode: z.enum(['realtime', 'batch']).default('realtime'),
     settings: z.record(z.unknown()).optional()
 });
 
 const updateProjectSchema = z.object({
     name: z.string().min(1).max(255).optional(),
-    language: z.string().length(2).optional(),
+    language: z.enum(VALID_LANGUAGES).optional(),
     transcription_mode: z.enum(['realtime', 'batch']).optional(),
     settings: z.record(z.unknown()).optional()
 });
@@ -19,7 +22,7 @@ const updateProjectSchema = z.object({
 const uploadSchema = z.object({
     session_id: z.string().min(1).max(100),
     question_id: z.string().max(50).optional(),
-    duration_seconds: z.coerce.number().int().min(1).max(300).optional(),
+    duration_seconds: z.coerce.number().int().min(0).max(300).optional(),
     metadata: z.record(z.unknown()).optional()
 });
 

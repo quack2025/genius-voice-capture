@@ -109,9 +109,11 @@
     }
 
     function renderIdle() {
-        // Check browser support
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            wrapper.innerHTML = '<div class="gv-msg gv-error-msg">' + t.notSupported + '</div>';
+        // Check browser support (includes MediaRecorder for iOS Safari <14.6)
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+            var msg = el('div', { className: 'gv-msg gv-error-msg' });
+            msg.textContent = t.notSupported;
+            wrapper.appendChild(msg);
             return;
         }
         var btn = el('button', { className: 'gv-btn gv-btn-record', onclick: startRecording });
@@ -157,7 +159,9 @@
     }
 
     function renderError() {
-        wrapper.innerHTML = '<div class="gv-msg gv-error-msg">' + (errorMsg || t.error) + '</div>';
+        var msgEl = el('div', { className: 'gv-msg gv-error-msg' });
+        msgEl.textContent = errorMsg || t.error;
+        wrapper.appendChild(msgEl);
         var btn = el('button', { className: 'gv-btn gv-btn-retry', onclick: resetWidget });
         btn.textContent = t.retry;
         wrapper.appendChild(btn);
@@ -165,6 +169,8 @@
 
     // --- Recording logic ---
     function startRecording() {
+        if (state !== 'idle') return; // Guard against double-click
+        state = 'recording'; // Set immediately to prevent race
         navigator.mediaDevices.getUserMedia({ audio: true })
             .then(function (stream) {
                 var mimeType = getMimeType();
@@ -185,12 +191,14 @@
                 };
 
                 mediaRecorder.start(1000);
-                state = 'recording';
 
                 timerInterval = setInterval(function () {
                     seconds++;
                     if (seconds >= maxDuration) {
                         stopRecording();
+                        // Show brief max-reached notice in uploading state
+                        var notice = wrapper.querySelector('.gv-uploading span');
+                        if (notice) notice.textContent = t.maxReached;
                         return;
                     }
                     var timerEl = wrapper.querySelector('.gv-timer');
@@ -199,8 +207,10 @@
 
                 render();
             })
-            .catch(function () {
-                errorMsg = t.permissionDenied;
+            .catch(function (err) {
+                errorMsg = (err && err.name === 'NotFoundError')
+                    ? t.notSupported   // No microphone hardware
+                    : t.permissionDenied;
                 state = 'error';
                 render();
             });
@@ -232,13 +242,24 @@
             if (state === 'uploading') render();
         }, 15000);
 
+        // Abort fetch after 120s to prevent indefinite hang
+        var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var fetchTimeout = setTimeout(function () {
+            if (controller) controller.abort();
+        }, 120000);
+
         fetch(apiUrl + '/api/transcribe', {
             method: 'POST',
             headers: { 'x-project-key': projectKey },
-            body: formData
+            body: formData,
+            signal: controller ? controller.signal : undefined
         })
-        .then(function (response) { return response.json(); })
+        .then(function (response) {
+            if (!response.ok) throw new Error('Server error: ' + response.status);
+            return response.json();
+        })
         .then(function (data) {
+            clearTimeout(fetchTimeout);
             clearTimeout(longTimer);
             if (data.success && data.status === 'completed') {
                 transcriptionText = data.transcription || '';
@@ -251,6 +272,7 @@
         })
         .catch(function () {
             clearTimeout(longTimer);
+            clearTimeout(fetchTimeout);
             errorMsg = t.error;
             state = 'error';
             render();
@@ -258,6 +280,11 @@
     }
 
     function resetWidget() {
+        clearInterval(timerInterval);
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            try { mediaRecorder.stop(); } catch (e) { /* ignore */ }
+        }
+        mediaRecorder = null;
         state = 'idle';
         transcriptionText = '';
         errorMsg = '';
