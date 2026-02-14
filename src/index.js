@@ -27,6 +27,11 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
+// Serve static files BEFORE CORS so voice.js is always accessible
+// (CORS middleware rejects requests without Origin header in production,
+//  which would block the widget script from being loaded)
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 // CORS configuration
 function isOriginAllowed(origin) {
     // In production, require an origin header to prevent CSRF
@@ -85,8 +90,10 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Serve static files (widget voice.js)
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Explicit route for voice.js widget (safety net in case express.static fails)
+app.get('/voice.js', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'public', 'voice.js'));
+});
 
 // API routes
 app.use('/api/transcribe', uploadLimiter, transcribeImmediateRoutes);
