@@ -32,6 +32,9 @@ const config = {
     // CORS origins
     allowedOrigins: [
         'https://voice.geniuslabs.ai',
+        'https://survey.alchemer.com',
+        'https://alchemer.com',
+        'https://alchemer.eu',
         'http://localhost:3000',
         'http://localhost:5173'
     ],
