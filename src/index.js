@@ -19,6 +19,15 @@ const path = require('path');
 
 const app = express();
 
+// Health check endpoint (must be before all middleware for Railway healthcheck)
+app.get('/health', (req, res) => {
+        res.json({
+                    status: 'ok',
+                    timestamp: new Date().toISOString(),
+                    version: process.env.npm_package_version || '1.0.0'
+        });
+});
+
 // Security middleware
 // Allow cross-origin loading of voice.js widget from external survey pages
 app.use(helmet({
@@ -79,15 +88,6 @@ const apiLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        version: process.env.npm_package_version || '1.0.0'
-    });
 });
 
 // Explicit route for voice.js widget (safety net in case express.static fails)
