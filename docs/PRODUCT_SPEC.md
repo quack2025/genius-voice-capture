@@ -1,8 +1,8 @@
 # Voice Capture - Especificación de Producto
 
-**Producto:** Voice Capture (Genius Labs AI Suite)  
-**Versión:** 1.0 MVP  
-**Última actualización:** 2026-01-21
+**Producto:** Voice Capture (Genius Labs AI Suite)
+**Versión:** 1.6
+**Última actualización:** 2026-02-15
 
 ---
 
@@ -134,15 +134,16 @@ Permitir a los encuestados responder preguntas abiertas usando audio en lugar de
 
 | Componente | Tecnología | Razón |
 |------------|------------|-------|
-| Widget (voice.js) | Vanilla JS + MediaRecorder API | Sin dependencias, funciona en cualquier sitio |
-| Dashboard | Lovable | Desarrollo rápido, consistente con Survey Coder PRO |
+| Widget (voice.js v1.6) | Vanilla JS + MediaRecorder API | Sin dependencias, funciona en cualquier sitio |
+| Dashboard | React + shadcn/ui + Tailwind (Lovable) | Desarrollo rápido, consistente con Survey Coder PRO |
 | Backend API | Node.js + Express (Claude Code) | Control total, desarrollo con AI |
 | Auth | Supabase Auth | Consistente con otros productos |
 | Base de datos | Supabase PostgreSQL | Integrado con auth, RLS |
 | Storage (audio) | Supabase Storage | Integrado, signed URLs |
 | Transcripción | OpenAI Whisper API | $0.006/min, 57 idiomas, rápido |
-| Cola | Supabase Edge Functions + pg_cron | Serverless, sin Redis |
 | Deploy | Railway (API) + Lovable (Dashboard) | Económico, escalable |
+| Dominio API | `voiceapi.survey-genius.ai` | Dominio profesional (Railway) |
+| Dominio Dashboard | `voice.geniuslabs.ai` | Lovable custom domain |
 
 ### Repositorios
 
@@ -410,7 +411,7 @@ Voice Capture ofrece dos modos para optimizar costos según las necesidades del 
 
 ---
 
-## Widget: voice.js
+## Widget: voice.js (v1.6)
 
 ### Funcionalidad del Script
 
@@ -421,11 +422,19 @@ Voice Capture ofrece dos modos para optimizar costos según las necesidades del 
 
 // El script automáticamente:
 // 1. Detecta el session_id de Alchemer via merge code
-// 2. Renderiza el widget de grabación
-// 3. Maneja permisos de micrófono
-// 4. Graba, muestra preview, permite re-grabar
-// 5. Sube el audio a la API con session_id
+// 2. Fetch config desde /api/widget-config/:projectKey (max_duration, branding, theme)
+// 3. Renderiza el widget de grabación con tema custom (si Pro)
+// 4. Maneja permisos de micrófono
+// 5. Graba, muestra preview, permite re-grabar
+// 6. Sube el audio a la API con session_id
+// 7. Muestra badge "Powered by Survey Genius" (si Free tier)
 ```
+
+### Features v1.6
+- **Config fetch**: Al iniciar, consulta `/api/widget-config/:projectKey` para obtener max_duration, branding y tema
+- **Branding badge**: Plan Free muestra "Powered by Survey Genius" al pie del widget
+- **Temas custom**: Plan Pro permite colores personalizados (`primary_color`, `background`, `border_radius`)
+- **API URL**: Apunta a `https://voiceapi.survey-genius.ai` por defecto
 
 ### Integración con Alchemer Session ID
 
@@ -447,9 +456,12 @@ Si el merge code no está disponible, el script puede extraer el session_id de l
 
 ## API Endpoints
 
+**Base URL:** `https://voiceapi.survey-genius.ai`
+
 ### Autenticación
 - Endpoints del dashboard requieren JWT de Supabase Auth
 - Endpoint de upload usa `x-project-key` (público, en el snippet)
+- Endpoints de widget-config son públicos (sin auth)
 
 ---
 
@@ -636,7 +648,97 @@ Elimina una grabación y su audio.
 
 ---
 
+### GET /api/account/usage
+Retorna el uso actual del usuario y su plan. Requiere JWT.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "plan": "freelancer",
+    "plan_name": "Freelancer",
+    "limits": {
+      "max_responses": 500,
+      "max_projects": 5,
+      "max_duration": 120
+    },
+    "usage": {
+      "responses_this_month": 127,
+      "projects_count": 3
+    },
+    "month": "2026-02"
+  }
+}
+```
+
+---
+
+### GET /api/account/plans
+Retorna definiciones de todos los planes (público, no requiere auth).
+
+**Response:**
+```json
+{
+  "success": true,
+  "plans": {
+    "free": { "name": "Free", "price": 0, "max_responses": 50, ... },
+    "freelancer": { "name": "Freelancer", "price": 29, ... },
+    "pro": { "name": "Pro", "price": 149, ... }
+  }
+}
+```
+
+---
+
+### GET /api/widget-config/:projectKey
+Retorna configuración del widget para un proyecto (público, usado por voice.js).
+
+**Response:**
+```json
+{
+  "max_duration": 120,
+  "language": "es",
+  "show_branding": false,
+  "theme": {
+    "preset": "default",
+    "primary_color": "#6366f1",
+    "background": "#ffffff",
+    "border_radius": 12
+  }
+}
+```
+
+*Cached 5 minutos en el backend.*
+
+---
+
 ## Modelo de Datos (Supabase)
+
+### Tabla: user_profiles
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid | PK, FK a auth.users |
+| plan | varchar(20) | 'free' \| 'freelancer' \| 'pro' (default 'free') |
+| plan_started_at | timestamp | Fecha inicio del plan actual |
+| created_at | timestamp | |
+| updated_at | timestamp | |
+
+*Se crea automáticamente via trigger on_auth_user_created.*
+
+### Tabla: usage
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| id | uuid | PK |
+| user_id | uuid | FK a auth.users |
+| month | varchar(7) | Mes en formato '2026-02' |
+| responses_count | integer | Respuestas del mes (default 0) |
+| created_at | timestamp | |
+| updated_at | timestamp | |
+
+*UNIQUE(user_id, month). Se incrementa via UPSERT después de cada transcripción exitosa.*
 
 ### Tabla: projects
 
@@ -748,14 +850,27 @@ CREATE POLICY batches_user_policy ON transcription_batches
 - ~1,000 audios de 1MB cada uno
 - Después: Supabase Pro ($25/mes) o limpiar audios antiguos
 
-### Modelo de Pricing Sugerido
+### Modelo de Pricing (Implementado v1.6)
 
-| Plan | Minutos de audio/mes | Precio |
-|------|---------------------|--------|
-| Trial | 30 min | Gratis |
-| Starter | 300 min (~5 horas) | $19/mes |
-| Professional | 1,500 min (~25 horas) | $79/mes |
-| Enterprise | Ilimitado | Contactar |
+| | Free | Freelancer ($29/mo) | Pro ($149/mo) |
+|---|------|---------------------|---------------|
+| Respuestas/mes | 50 | 500 | 5,000 |
+| Proyectos | 1 | 5 | Ilimitados |
+| Duracion max | 60s | 120s | 300s |
+| Idiomas | Solo espanol | 9 principales | 36 (todos) |
+| Export | CSV | CSV + XLSX | CSV + XLSX + API |
+| Batch | No | Si | Si |
+| Retencion | 30 dias | 90 dias | 1 ano |
+| Widget branding | "Powered by Survey Genius" | Sin branding | White-label (colores custom) |
+| Dominios custom | No | No | Si |
+| Costo Whisper est. | ~$0.23 | ~$2.25 | ~$22.50 |
+| **Margen** | Marketing | **~92%** | **~85%** |
+
+**Enforcement:**
+- `validateProjectKey` middleware verifica plan + usage en cada request
+- Respuestas sobre cuota retornan HTTP 429
+- Proyectos sobre limite retornan HTTP 403
+- Idiomas no permitidos retornan HTTP 403
 
 ---
 
@@ -827,27 +942,36 @@ CREATE POLICY batches_user_policy ON transcription_batches
 
 ## Roadmap
 
-### Fase 1: MVP (este documento)
-- Widget básico de grabación (voice.js)
+### Fase 1: MVP (v1.0-v1.5) -- COMPLETADO
+- Widget basico de grabacion (voice.js)
 - Modos Real-Time y Batch
-- Transcripción con Whisper
+- Transcripcion con Whisper (inmediata en endpoint)
 - Dashboard con export CSV
 - JOIN manual por session_id
+- Deploy: Railway (API) + Lovable (Dashboard)
 
-### Fase 1.5: Mejoras UX
-- Múltiples preguntas de audio por encuesta
-- Análisis de sentimiento (Whisper detecta tono)
-- Integración con Survey Coder PRO (importar transcripciones)
+### Fase 1.6: Tiers + Usage (v1.6) -- COMPLETADO
+- 3 planes: Free / Freelancer ($29) / Pro ($149)
+- Usage tracking mensual con enforcement en middleware
+- Dashboard de uso (barra de progreso, tabla comparativa)
+- Widget v1.6: config fetch, branding badge (Free), temas custom (Pro)
+- CORS dinamico para dominios custom (Pro)
+- Dominio profesional: `voiceapi.survey-genius.ai`
 
-### Fase 2: Integraciones
-- Múltiples preguntas de audio por encuesta
-- Integración directa con Survey Coder PRO
-- Webhook para notificar cuando transcripción está lista
-- Análisis de sentimiento automático
+### Fase 2: Mejoras UX
+- Multiples preguntas de audio por encuesta
+- Analisis de sentimiento (Whisper detecta tono)
+- Integracion con Survey Coder PRO (importar transcripciones)
+- Integracion de pagos (Stripe) para upgrade de planes
 
-### Fase 3: Conversacional
+### Fase 3: Integraciones
+- Integracion directa con Survey Coder PRO
+- Webhook para notificar cuando transcripcion esta lista
+- Analisis de sentimiento automatico
+
+### Fase 4: Conversacional
 - Agente de voz para repreguntas en tiempo real
-- Integración con sistema de repreguntas actual
+- Integracion con sistema de repreguntas actual
 - Voice-to-voice (sin texto intermedio)
 
 ---

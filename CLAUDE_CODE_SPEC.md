@@ -3,7 +3,7 @@
 **Proyecto:** voice-capture-api  
 **Tipo:** Backend API  
 **Stack:** Node.js + Express + Supabase + OpenAI Whisper  
-**Última actualización:** 2026-01-21
+**Última actualización:** 2026-02-15
 
 ---
 
@@ -68,19 +68,24 @@ MAX_AUDIO_DURATION_SECONDS=180
 ```
 voice-capture-api/
 ├── src/
-│   ├── index.js                 # Entry point
+│   ├── index.js                 # Entry point + CORS dinámico
 │   ├── config/
-│   │   ├── supabase.js          # Cliente Supabase
-│   │   └── openai.js            # Cliente OpenAI
+│   │   ├── index.js             # Config general (allowedOrigins, wildcards)
+│   │   ├── supabase.js          # Cliente Supabase (anon + admin)
+│   │   ├── openai.js            # Cliente OpenAI
+│   │   └── plans.js             # Definiciones de planes (Free/Freelancer/Pro)
 │   ├── routes/
 │   │   ├── upload.js            # POST /api/upload
-│   │   ├── projects.js          # CRUD proyectos
+│   │   ├── projects.js          # CRUD proyectos (con enforcement de límites)
 │   │   ├── recordings.js        # CRUD grabaciones
 │   │   ├── transcribe.js        # Batch transcription
-│   │   └── export.js            # Export CSV/Excel
+│   │   ├── transcribeImmediate.js # Transcripción inmediata (real-time)
+│   │   ├── export.js            # Export CSV/Excel
+│   │   ├── account.js           # GET /api/account/usage + /plans
+│   │   └── widgetConfig.js      # GET /api/widget-config/:key (público)
 │   ├── middleware/
 │   │   ├── auth.js              # Validar JWT Supabase
-│   │   ├── projectKey.js        # Validar project key (para widget)
+│   │   ├── projectKey.js        # Validar project key + plan + usage enforcement
 │   │   └── errorHandler.js      # Manejo global de errores
 │   ├── services/
 │   │   ├── whisper.js           # Integración OpenAI Whisper
@@ -88,9 +93,15 @@ voice-capture-api/
 │   │   └── transcriptionQueue.js # Cola de transcripción
 │   ├── utils/
 │   │   ├── generateId.js        # Generar IDs únicos
+│   │   ├── audioUtils.js        # Detección de formato + duración de audio
 │   │   └── csvParser.js         # Parsear CSV de Alchemer
 │   └── validators/
 │       └── schemas.js           # Esquemas Zod
+├── database/
+│   ├── schema.sql               # Schema inicial (projects, recordings, batches)
+│   └── migration_002_plans_usage.sql # user_profiles + usage tables
+├── public/
+│   └── voice.js                 # Widget v1.6
 ├── tests/
 │   └── ...
 ├── .env.example
@@ -204,6 +215,51 @@ CREATE POLICY "Users can view recordings of own projects" ON recordings
 -- El backend valida el public_key y usa service role para insertar
 ```
 
+### Tabla: user_profiles (v1.6)
+
+```sql
+CREATE TABLE user_profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    plan VARCHAR(20) NOT NULL DEFAULT 'free'
+        CHECK (plan IN ('free', 'freelancer', 'pro')),
+    plan_started_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "users_view_own_profile" ON user_profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "users_update_own_profile" ON user_profiles FOR UPDATE USING (auth.uid() = id);
+
+-- Auto-crear perfil en signup
+CREATE OR REPLACE FUNCTION create_user_profile()
+RETURNS TRIGGER AS $$
+BEGIN INSERT INTO user_profiles (id) VALUES (NEW.id); RETURN NEW; END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION create_user_profile();
+```
+
+### Tabla: usage (v1.6)
+
+```sql
+CREATE TABLE usage (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    month VARCHAR(7) NOT NULL,  -- '2026-02'
+    responses_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, month)
+);
+
+CREATE INDEX idx_usage_user_month ON usage(user_id, month);
+
+ALTER TABLE usage ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "users_view_own_usage" ON usage FOR SELECT USING (auth.uid() = user_id);
+```
+
 ### Storage Bucket
 
 ```sql
@@ -217,6 +273,8 @@ CREATE POLICY "Users can view recordings of own projects" ON recordings
 ---
 
 ## API Endpoints
+
+**Base URL:** `https://voiceapi.survey-genius.ai`
 
 ### 1. POST /api/upload
 
@@ -582,6 +640,60 @@ session_id,transcription,duration_seconds,status,created_at,transcribed_at
 
 ---
 
+### 10. GET /api/account/usage (v1.6)
+
+**Propósito:** Retornar uso actual del usuario y su plan.
+
+**Autenticación:** JWT Supabase
+
+**Response:**
+```json
+{
+    "success": true,
+    "data": {
+        "plan": "freelancer",
+        "plan_name": "Freelancer",
+        "limits": { "max_responses": 500, "max_projects": 5, "max_duration": 120 },
+        "usage": { "responses_this_month": 127, "projects_count": 3 },
+        "month": "2026-02"
+    }
+}
+```
+
+---
+
+### 11. GET /api/account/plans (v1.6)
+
+**Propósito:** Retornar definiciones de planes (público, sin auth).
+
+**Response:**
+```json
+{
+    "success": true,
+    "plans": { "free": {...}, "freelancer": {...}, "pro": {...} }
+}
+```
+
+---
+
+### 12. GET /api/widget-config/:projectKey (v1.6)
+
+**Propósito:** Retornar configuración del widget para voice.js (público).
+
+**Response:**
+```json
+{
+    "max_duration": 120,
+    "language": "es",
+    "show_branding": false,
+    "theme": { "preset": "default", "primary_color": "#6366f1" }
+}
+```
+
+*Cached 5 minutos. Widget lo consulta en init para aplicar tema y branding.*
+
+---
+
 ## Servicio de Transcripción (Whisper)
 
 ### src/services/whisper.js
@@ -713,44 +825,21 @@ module.exports = { requireAuth };
 ### src/middleware/projectKey.js
 
 ```javascript
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY // Service role para bypass RLS
-);
-
 /**
  * Middleware para validar project key (usado por widget)
+ * En v1.6 también:
+ * - Consulta user_profiles.plan del owner del proyecto
+ * - Consulta usage del mes actual
+ * - Si responses_count >= plan.max_responses → 429
+ * - Adjunta req.plan, req.planKey, req.usage al request
  */
 async function validateProjectKey(req, res, next) {
-    const projectKey = req.headers['x-project-key'];
-    
-    if (!projectKey) {
-        return res.status(401).json({ 
-            success: false, 
-            error: 'Missing x-project-key header' 
-        });
-    }
-    
-    const { data: project, error } = await supabase
-        .from('projects')
-        .select('id, transcription_mode, language')
-        .eq('public_key', projectKey)
-        .single();
-    
-    if (error || !project) {
-        return res.status(401).json({ 
-            success: false, 
-            error: 'Invalid project key' 
-        });
-    }
-    
-    req.project = project;
-    next();
+    // 1. Validar project key
+    // 2. Buscar plan del owner (JOIN user_profiles)
+    // 3. Buscar usage del mes actual
+    // 4. Verificar cuota: si usage >= plan.max_responses → 429
+    // 5. Adjuntar: req.project, req.plan, req.planKey, req.usage
 }
-
-module.exports = { validateProjectKey };
 ```
 
 ---
@@ -862,40 +951,32 @@ app.get('/health', (req, res) => {
 
 ## CORS Configuration
 
+CORS usa validación estática + dinámica (para dominios custom de plan Pro):
+
 ```javascript
-const cors = require('cors');
+// config/index.js - origins estáticos
+allowedOrigins: [
+    'https://voice.geniuslabs.ai',           // Dashboard
+    'https://voiceapi.survey-genius.ai',     // API domain
+    'http://localhost:3000',                  // Local dev
+    'http://localhost:5173'                   // Vite dev
+]
 
-// Función para validar origins con wildcards
-const allowedOrigins = [
-    'https://voice.geniuslabs.ai',
-    'http://localhost:3000',
-    'http://localhost:5173'
-];
+// Wildcards via regex
+wildcardPatterns: [
+    /\.lovable\.app$/,     // Lovable preview
+    /\.alchemer\.com$/,    // Alchemer surveys
+    /\.alchemer\.eu$/,     // Alchemer EU
+    /\.surveygizmo\.com$/, // SurveyGizmo legacy
+]
 
-const wildcardPatterns = [
-    /^https:\/\/.*\.lovable\.app$/,
-    /^https:\/\/.*\.alchemer\.com$/,
-    /^https:\/\/.*\.alchemer\.eu$/
-];
-
-function isOriginAllowed(origin) {
-    if (!origin) return true; // Allow requests with no origin (like mobile apps)
-    if (allowedOrigins.includes(origin)) return true;
-    return wildcardPatterns.some(pattern => pattern.test(origin));
-}
-
-app.use(cors({
-    origin: (origin, callback) => {
-        if (isOriginAllowed(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-project-key']
-}));
+// index.js - CORS dinámico para custom domains (Pro)
+// Carga projects.settings.custom_domains[] de la BD con cache de 5 min
+// Si el origin está en custom_domains de algún proyecto Pro → permitir
 ```
+
+**Headers permitidos:** `Content-Type`, `Authorization`, `x-project-key`
+**Métodos:** `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`
 
 ---
 
@@ -932,6 +1013,30 @@ app.use('/api/', apiLimiter);
 
 ---
 
+## Plan Tiers (v1.6)
+
+### src/config/plans.js
+
+```javascript
+const PLANS = {
+    free:       { max_responses: 50,   max_projects: 1,    max_duration: 60,  batch: false, retention_days: 30,  show_branding: true,  custom_themes: false, custom_domains: false },
+    freelancer: { max_responses: 500,  max_projects: 5,    max_duration: 120, batch: true,  retention_days: 90,  show_branding: false, custom_themes: false, custom_domains: false },
+    pro:        { max_responses: 5000, max_projects: null,  max_duration: 300, batch: true,  retention_days: 365, show_branding: false, custom_themes: true,  custom_domains: true  }
+};
+```
+
+### Enforcement
+- **projectKey.js**: Verifica cuota mensual (429 si excede)
+- **projects.js**: Verifica limite de proyectos (403) + idiomas permitidos
+- **transcribeImmediate.js**: Usa `req.plan.max_duration` en lugar de config global, incrementa usage via UPSERT
+
+### Widget Theming (Pro)
+- Tema almacenado en `projects.settings.theme` (JSONB)
+- Estructura: `{ preset, primary_color, background, border_radius }`
+- Widget lo consulta via `/api/widget-config/:projectKey`
+
+---
+
 ## Notas Importantes
 
 1. **Service Role Key:** Usar SOLO en el backend, nunca exponer al cliente
@@ -939,8 +1044,10 @@ app.use('/api/', apiLimiter);
 3. **Rate Limiting:** Implementado con express-rate-limit (ver sección anterior)
 4. **Logging:** Agregar logging estructurado para debugging
 5. **Whisper Timeout:** El API puede tardar ~1 seg por cada 10 seg de audio. Para audios de 3 min, puede tardar ~20 seg.
-6. **Límite de Whisper API:** Máximo 25MB por archivo de audio
-7. **Validación de duración:** Usar MAX_AUDIO_DURATION_SECONDS para rechazar audios muy largos
+6. **Limite de Whisper API:** Maximo 25MB por archivo de audio
+7. **Validacion de duracion:** Controlada por plan del usuario (60s/120s/300s)
+8. **Usage tracking:** UPSERT en tabla `usage` despues de cada transcripcion exitosa
+9. **Custom domains (Pro):** Cache de 5 minutos para evitar queries en cada request CORS
 
 ---
 
