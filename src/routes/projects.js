@@ -5,6 +5,7 @@ const { createProjectSchema, updateProjectSchema, validate } = require('../valid
 const { generateProjectKey } = require('../utils/generateId');
 const { deleteProjectAudios } = require('../services/storage');
 const { supabaseAdmin } = require('../config/supabase');
+const { getPlan } = require('../config/plans');
 
 const router = express.Router();
 
@@ -136,6 +137,44 @@ router.post('/',
 
         const { name, language, transcription_mode, settings } = validation.data;
         const userId = req.user.id;
+
+        // Fetch user plan and enforce limits
+        const { data: profile } = await supabaseAdmin
+            .from('user_profiles')
+            .select('plan')
+            .eq('id', userId)
+            .single();
+
+        const planKey = profile?.plan || 'free';
+        const plan = getPlan(planKey);
+
+        // Check project count limit
+        if (plan.max_projects !== null) {
+            const { count: projectCount } = await supabaseAdmin
+                .from('projects')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId);
+
+            if (projectCount >= plan.max_projects) {
+                return res.status(403).json({
+                    success: false,
+                    error: `Project limit reached. Your ${plan.name} plan allows ${plan.max_projects} project(s).`,
+                    limit: plan.max_projects,
+                    plan: planKey
+                });
+            }
+        }
+
+        // Check language is allowed for plan
+        if (plan.languages && !plan.languages.includes(language)) {
+            return res.status(403).json({
+                success: false,
+                error: `Language '${language}' is not available on your ${plan.name} plan.`,
+                allowed_languages: plan.languages,
+                plan: planKey
+            });
+        }
+
         const publicKey = generateProjectKey();
 
         const { data: project, error } = await supabaseAdmin

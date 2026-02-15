@@ -15,7 +15,10 @@ const recordingsRoutes = require('./routes/recordings');
 const transcribeRoutes = require('./routes/transcribe');
 const exportRoutes = require('./routes/export');
 const transcribeImmediateRoutes = require('./routes/transcribeImmediate');
+const widgetConfigRoutes = require('./routes/widgetConfig');
+const accountRoutes = require('./routes/account');
 const path = require('path');
+const { supabaseAdmin } = require('./config/supabase');
 
 const app = express();
 
@@ -44,9 +47,8 @@ app.use(helmet({
 //  which would block the widget script from being loaded)
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// CORS configuration
+// CORS configuration — static allowlist + dynamic custom domains (Pro)
 function isOriginAllowed(origin) {
-    // In production, require an origin header to prevent CSRF
     if (!origin) {
         return config.nodeEnv === 'development';
     }
@@ -54,13 +56,52 @@ function isOriginAllowed(origin) {
     return config.wildcardPatterns.some(pattern => pattern.test(origin));
 }
 
-app.use(cors({
-    origin: (origin, callback) => {
-        if (isOriginAllowed(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+// Cache custom domains for 5 minutes to avoid DB lookups on every request
+let customDomainsCache = { domains: new Set(), expiresAt: 0 };
+
+async function loadCustomDomains() {
+    const now = Date.now();
+    if (now < customDomainsCache.expiresAt) return customDomainsCache.domains;
+
+    try {
+        const { data: projects } = await supabaseAdmin
+            .from('projects')
+            .select('settings')
+            .not('settings', 'is', null);
+
+        const domains = new Set();
+        if (projects) {
+            for (const p of projects) {
+                const cd = p.settings?.custom_domains;
+                if (Array.isArray(cd)) {
+                    cd.forEach(d => domains.add(d));
+                }
+            }
         }
+        customDomainsCache = { domains, expiresAt: now + 5 * 60 * 1000 };
+        return domains;
+    } catch (err) {
+        console.error('Failed to load custom domains:', err.message);
+        return customDomainsCache.domains; // return stale cache on error
+    }
+}
+
+app.use(cors({
+    origin: async (origin, callback) => {
+        if (isOriginAllowed(origin)) {
+            return callback(null, true);
+        }
+        // Check dynamic custom domains (Pro feature)
+        if (origin) {
+            try {
+                const domains = await loadCustomDomains();
+                const originHost = new URL(origin).hostname;
+                if (domains.has(origin) || domains.has(originHost)) {
+                    return callback(null, true);
+                }
+            } catch (e) { /* invalid origin URL, fall through */ }
+        }
+        callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-project-key']
@@ -105,6 +146,8 @@ app.use('/api/projects', apiLimiter, projectsRoutes);
 app.use('/api/projects/:projectId/recordings', apiLimiter, recordingsRoutes);
 app.use('/api/projects/:projectId/transcribe-batch', apiLimiter, transcribeRoutes);
 app.use('/api/projects/:projectId/export', apiLimiter, exportRoutes);
+app.use('/api/widget-config', widgetConfigRoutes);
+app.use('/api/account', apiLimiter, accountRoutes);
 
 // 404 handler
 app.use((req, res) => {

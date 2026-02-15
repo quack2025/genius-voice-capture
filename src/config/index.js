@@ -32,6 +32,7 @@ const config = {
     // CORS origins
     allowedOrigins: [
         'https://voice.geniuslabs.ai',
+        'https://voiceapi.survey-genius.ai',
         'http://localhost:3000',
         'http://localhost:5173'
     ],

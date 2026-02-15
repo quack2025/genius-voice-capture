@@ -1,5 +1,5 @@
 /**
- * Genius Voice Capture Widget v1.5
+ * Genius Voice Capture Widget v1.6
  * Standalone widget for embedding voice recording in surveys (Alchemer, etc.)
  *
  * Usage — Alchemer JavaScript Action (recommended):
@@ -14,13 +14,13 @@
  *   s[s.length-1].parentNode.appendChild(c);
  *   if(window.GeniusVoice){GeniusVoice.init(c)}
  *   else{var j=document.createElement('script');
- *   j.src='https://voice-capture-api-production.up.railway.app/voice.js';
+ *   j.src='https://voiceapi.survey-genius.ai/voice.js';
  *   document.head.appendChild(j)}
  *
  * Usage — HTML embed (generic platforms):
  *   <div id="genius-voice" data-project="proj_xxx" data-session="SESSION_ID"
  *        data-question="q1" data-lang="es"></div>
- *   <script src="https://voice-capture-api-production.up.railway.app/voice.js"></script>
+ *   <script src="https://voiceapi.survey-genius.ai/voice.js"></script>
  */
 (function () {
     'use strict';
@@ -87,7 +87,7 @@
         var questionId = container.dataset.question || null;
         var maxDuration = parseInt(container.dataset.maxDuration, 10) || 120;
         var lang = container.dataset.lang || 'es';
-        var apiUrl = container.dataset.api || getScriptOrigin() || 'https://voice-capture-api-production.up.railway.app';
+        var apiUrl = container.dataset.api || getScriptOrigin() || 'https://voiceapi.survey-genius.ai';
         var targetSelector = container.dataset.target || null;
 
         // --- i18n ---
@@ -145,6 +145,8 @@
         var seconds = 0;
         var transcriptionText = '';
         var errorMsg = '';
+        var showBranding = false;
+        var configLoaded = false;
 
         // --- Write transcription to host form field ---
         function writeToFormField(text) {
@@ -207,6 +209,7 @@
                 case 'success': renderSuccess(); break;
                 case 'error': renderError(); break;
             }
+            renderBranding();
         }
 
         function renderIdle() {
@@ -267,6 +270,39 @@
             var btn = el('button', { className: 'gv-btn gv-btn-retry', onclick: resetWidget });
             btn.textContent = t.retry;
             wrapper.appendChild(btn);
+        }
+
+        function renderBranding() {
+            if (!showBranding) return;
+            var badge = el('div', { className: 'gv-branding' });
+            var link = el('a', { href: 'https://survey-genius.ai', target: '_blank' });
+            link.textContent = 'Powered by Survey Genius';
+            badge.appendChild(link);
+            wrapper.appendChild(badge);
+        }
+
+        function applyTheme(theme) {
+            if (!theme) return;
+            var css = [];
+            if (theme.primary_color) {
+                css.push('.gv-btn-record{background:' + theme.primary_color + '}');
+                css.push('.gv-btn-record:hover{background:' + theme.primary_color + ';filter:brightness(0.9)}');
+                css.push('.gv-spinner{border-top-color:' + theme.primary_color + '}');
+            }
+            if (theme.background) {
+                css.push('.gv-widget{background:' + theme.background + '}');
+            }
+            if (theme.border_radius != null) {
+                css.push('.gv-widget{border-radius:' + theme.border_radius + 'px}');
+            }
+            if (theme.text_color) {
+                css.push('.gv-widget{color:' + theme.text_color + '}');
+            }
+            if (css.length) {
+                var s = document.createElement('style');
+                s.textContent = css.join('\n');
+                shadow.appendChild(s);
+            }
         }
 
         // --- Recording logic ---
@@ -416,6 +452,18 @@
             render();
         }
 
+        // --- Fetch widget config (non-blocking) ---
+        fetch(apiUrl + '/api/widget-config/' + projectKey)
+            .then(function (r) { return r.json(); })
+            .then(function (cfg) {
+                configLoaded = true;
+                if (cfg.max_duration) maxDuration = cfg.max_duration;
+                if (cfg.show_branding) showBranding = true;
+                if (cfg.theme) applyTheme(cfg.theme);
+                render();
+            })
+            .catch(function () { /* use defaults on error */ });
+
         // --- Initialize widget ---
         render();
     }
@@ -511,7 +559,10 @@
             '.gv-msg { font-size: 15px; font-weight: 500; margin-bottom: 4px; }',
             '.gv-success-msg { color: #16a34a; }',
             '.gv-error-msg { color: #dc2626; margin-bottom: 12px; }',
-            '.gv-preview { font-size: 13px; color: #64748b; background: #f8fafc; padding: 12px; border-radius: 8px; margin-top: 12px; text-align: left; line-height: 1.5; max-height: 120px; overflow-y: auto; }'
+            '.gv-preview { font-size: 13px; color: #64748b; background: #f8fafc; padding: 12px; border-radius: 8px; margin-top: 12px; text-align: left; line-height: 1.5; max-height: 120px; overflow-y: auto; }',
+            '.gv-branding { margin-top: 10px; text-align: center; font-size: 11px; }',
+            '.gv-branding a { color: #94a3b8; text-decoration: none; }',
+            '.gv-branding a:hover { color: #6366f1; text-decoration: underline; }'
         ].join('\n');
     }
 

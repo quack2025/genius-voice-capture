@@ -64,11 +64,12 @@ router.post('/',
                                      const { session_id, question_id, duration_seconds, language, metadata } = bodyValidation.data;
                             const project = req.project;
 
-                                     // 3. Validate duration
-                                     if (duration_seconds && duration_seconds > config.maxAudioDurationSeconds) {
+                                     // 3. Validate duration against plan limit
+                                     const maxDuration = req.plan ? req.plan.max_duration : config.maxAudioDurationSeconds;
+                                     if (duration_seconds && duration_seconds > maxDuration) {
                                                      return res.status(400).json({
                                                                          success: false,
-                                                                         error: `Audio too long. Maximum duration: ${config.maxAudioDurationSeconds} seconds`
+                                                                         error: `Audio too long. Maximum duration for your plan: ${maxDuration} seconds`
                                                      });
                                      }
 
@@ -112,6 +113,17 @@ router.post('/',
 
                                 if (dbError) {
                                                     throw new Error(`Failed to create recording: ${dbError.message}`);
+                                }
+
+                                // Increment monthly usage counter
+                                if (req.usage) {
+                                    await supabaseAdmin
+                                        .from('usage')
+                                        .upsert({
+                                            user_id: req.usage.userId,
+                                            month: req.usage.month,
+                                            responses_count: req.usage.current + 1
+                                        }, { onConflict: 'user_id,month' });
                                 }
 
                                 return res.status(200).json({
