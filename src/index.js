@@ -19,6 +19,9 @@ const path = require('path');
 
 const app = express();
 
+// Railway runs behind a reverse proxy — required for express-rate-limit
+app.set('trust proxy', 1);
+
 // Health check endpoint (must be before all middleware for Railway healthcheck)
 app.get('/health', (req, res) => {
         res.json({

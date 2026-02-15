@@ -126,8 +126,8 @@ public/
 3. transcribeFromBuffer(audioBuffer, extension, language)
    - 3 reintentos con backoff exponencial
    - Timeout 60s por intento
-4A. EXITO: INSERT recording con audio_path=null, status='completed', transcription=text
-4B. FALLO: Upload audio a Storage, INSERT con status='failed', audio_path=ruta
+4A. EXITO: INSERT recording con audio_path='transcribed-immediate', status='completed', transcription=text
+4B. FALLO: Upload audio a Storage, INSERT con status='failed', audio_path=ruta o 'failed-no-audio'
 5. Response: { success, recording_id, status, transcription }
 ```
 
@@ -166,29 +166,47 @@ batch_id (UUID, NULLABLE)
 created_at, transcribed_at (TIMESTAMPTZ)
 ```
 
-**Importante:** `audio_path` es nullable. Recordings exitosos tienen `audio_path = null` (audio descartado). Solo los fallback tienen audio almacenado.
+**Importante:** `audio_path` es nullable en el schema (ALTER ejecutado). En la practica:
+- `'transcribed-immediate'` = transcripcion exitosa, audio descartado
+- ruta real en Storage = fallback (Whisper fallo, audio guardado para retry)
+- `'failed-no-audio'` = Whisper y Storage fallaron
 
 ---
 
-## Widget voice.js
+## Widget voice.js (v1.2)
 
-Widget standalone (IIFE, vanilla JS) para embeber en encuestas Alchemer:
+Widget standalone (IIFE, vanilla JS) para embeber en encuestas Alchemer.
 
+**API global:** `window.GeniusVoice.init(container)` y `window.GeniusVoice.scan()`
+
+**Embed en Alchemer (JavaScript Action):**
+```javascript
+var c=document.createElement('div');
+c.dataset.project='proj_xxx';
+c.dataset.session='[survey("session id")]';
+c.dataset.question='q1';
+c.dataset.lang='es';
+var s=document.scripts;
+s[s.length-1].parentNode.appendChild(c);
+if(window.GeniusVoice){GeniusVoice.init(c)}
+else{var j=document.createElement('script');
+j.src='https://voice-capture-api-production.up.railway.app/voice.js';
+document.head.appendChild(j)}
+```
+
+**Embed generico (HTML):**
 ```html
-<div id="genius-voice"
-     data-project="proj_xxx"
-     data-session="[survey('session id')]"
-     data-lang="es"
-     data-max-duration="120">
-</div>
+<div id="genius-voice" data-project="proj_xxx" data-session="SESSION_ID"
+     data-question="q1" data-lang="es"></div>
 <script src="https://voice-capture-api-production.up.railway.app/voice.js"></script>
 ```
 
-- Shadow DOM para aislamiento CSS
+- Shadow DOM cerrado para aislamiento CSS (no accesible via shadowRoot)
 - MediaRecorder API (WebM/Opus preferido, fallback MP4)
 - i18n interno (es/en/pt) via data-lang
 - Estados: idle -> recording -> uploading -> success -> error
 - Auto-detecta API URL desde script origin
+- Soporta multiples widgets por pagina (una por pregunta)
 
 ---
 
@@ -203,7 +221,7 @@ transcribeFromBuffer(audioBuffer, extension = 'webm', language = 'es')
 transcribeAudio(audioPath, language = 'es')
 // -> Descarga de Storage, delega a transcribeFromBuffer
 
-// Retry: 3 intentos, backoff exponencial, timeout 60s
+// Retry: 2 intentos (WHISPER_MAX_RETRIES), backoff exponencial + jitter, timeout 30s (WHISPER_TIMEOUT_MS)
 // Costo: ~$0.006 USD por minuto de audio
 ```
 
@@ -360,50 +378,45 @@ Solo el texto de la pregunta. NO agregar divs aqui (Alchemer los strip o quedan 
 ### Notas tecnicas
 
 - **voice.js usa Shadow DOM cerrado** (`attachShadow({mode: 'closed'})`): El widget UI no es accesible via `el.shadowRoot` ni aparece en el DOM inspector normal, pero se renderiza visualmente y responde a clicks.
-- - **Merge codes de Alchemer** (`[survey("session id")]`): Se resuelven en el servidor antes de enviar el HTML al browser. Dentro de JavaScript Actions, Alchemer reemplaza el merge code por el valor real antes de ejecutar el script.
-  - - **Orden de middlewares en Express es critico:** La secuencia debe ser: (1) /health, (2) Helmet, (3) express.static, (4) CORS, (5) body parsers, (6) rate limiting, (7) rutas API.
-    - - **CORS ya permite *.alchemer.com:** La config en `src/config/index.js` tiene wildcard patterns para `*.alchemer.com`, `*.alchemer.eu` y `*.lovable.app`. Las llamadas POST/GET desde `survey.alchemer.com` a los endpoints API funcionan correctamente.
-      -  **express-rate-limit ERR_ERL_UNEXPECTED_X_FORWARDED_FOR:** Railway opera detras de un proxy. El rate limiter puede lanzar este error si no se configura `app.set('trust proxy', 1)`. Pendiente de verificar si afecta funcionalidad.
-     
-      -  ### Problema 5: Transcripcion falla con "Error al transcribir" (2026-02-14)
-      -  
-      **Sintoma:** Al grabar y detener en la encuesta, el widget muestra "Error al transcribir". En la consola de red solo se ve OPTIONS 204 pero no el POST real.
+- **Merge codes de Alchemer** (`[survey("session id")]`): Se resuelven en el servidor antes de enviar el HTML al browser. Dentro de JavaScript Actions, Alchemer reemplaza el merge code por el valor real antes de ejecutar el script.
+- **Orden de middlewares en Express es critico:** La secuencia debe ser: (1) trust proxy, (2) /health, (3) Helmet, (4) express.static, (5) CORS, (6) body parsers, (7) rate limiting, (8) rutas API.
+- **CORS ya permite *.alchemer.com:** La config en `src/config/index.js` tiene wildcard patterns para `*.alchemer.com`, `*.alchemer.eu` y `*.lovable.app`. Las llamadas POST/GET desde `survey.alchemer.com` a los endpoints API funcionan correctamente.
+
+### Problema 5: Transcripcion falla con "Error al transcribir" (2026-02-14)
+
+**Sintoma:** Al grabar y detener en la encuesta, el widget muestra "Error al transcribir". En la consola de red solo se ve OPTIONS 204 pero no el POST real.
 
 **Causa raiz (encontrada en Railway Deploy Logs):** Dos errores en la base de datos:
 
 1. **`value too long for type character varying(5)`** - La API de Whisper con `response_format: 'verbose_json'` devuelve nombres completos del idioma (ej: `"spanish"`, `"english"`, `"portuguese"`) en el campo `language`. El codigo insertaba este valor directamente en `language_detected VARCHAR(5)`. `"spanish"` tiene 7 caracteres y no cabe en VARCHAR(5).
 
-2. 2. **`audio_path NOT NULL violation`** - La tabla `recordings` tiene `audio_path TEXT NOT NULL` en el schema SQL. Pero `transcribeImmediate.js` en el path de exito insertaba `audio_path: null` (porque no se guarda audio cuando la transcripcion es exitosa).
-  
-   3. **Solucion aplicada** (commit `66708f9`):
-  
-   4. En `src/routes/transcribeImmediate.js`:
-   5. - Se agrego `LANGUAGE_MAP` para convertir nombres de Whisper a codigos ISO 639-1 (ej: `spanish -> es`, `english -> en`)
-      - - Se agrego funcion `normalizeLanguageCode(lang)` que mapea el nombre completo o trunca a 5 chars como fallback
-        - - Se cambio `audio_path: null` a `audio_path: 'transcribed-immediate'` en el path de exito
-          - - Se cambio `audio_path: audioPath` a `audio_path: audioPath || 'failed-no-audio'` en el path de fallback
-           
-            - **Nota sobre el modelo de datos:** El CLAUDE.md original decia que `audio_path` es nullable, pero el schema SQL real (`database/schema.sql`) lo define como `TEXT NOT NULL`. El fix en codigo es una solucion pragmatica; idealmente se deberia tambien ejecutar `ALTER TABLE recordings ALTER COLUMN audio_path DROP NOT NULL;` en Supabase para alinear schema con la intencion del diseno.
-           
-            - ### Problema 6: express-rate-limit ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
-           
-            - **Sintoma:** Error en Railway logs: `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`
-           
-            - **Causa:** Railway opera detras de un reverse proxy. `express-rate-limit` v7+ requiere configuracion explicita de trust proxy.
-           
-            - **Solucion pendiente:** Agregar `app.set('trust proxy', 1)` en `src/index.js` antes de los rate limiters. Ver: https://express-rate-limit.github.io/ERR_ERL_UNEXPECTED_X_FORWARDED_FOR/
-           
-            - ---
+2. **`audio_path NOT NULL violation`** - La tabla `recordings` tiene `audio_path TEXT NOT NULL` en el schema SQL. Pero `transcribeImmediate.js` en el path de exito insertaba `audio_path: null` (porque no se guarda audio cuando la transcripcion es exitosa).
 
-            ## Resumen de todos los cambios realizados (2026-02-14)
+**Solucion aplicada** (commit `66708f9`) en `src/routes/transcribeImmediate.js`:
+- Se agrego `LANGUAGE_MAP` para convertir nombres de Whisper a codigos ISO 639-1 (ej: `spanish -> es`, `english -> en`)
+- Se agrego funcion `normalizeLanguageCode(lang)` que mapea el nombre completo o trunca a 5 chars como fallback
+- Se cambio `audio_path: null` a `audio_path: 'transcribed-immediate'` en el path de exito
+- Se cambio `audio_path: audioPath` a `audio_path: audioPath || 'failed-no-audio'` en el path de fallback
 
-            | # | Problema | Archivo | Commit | Estado |
-            |---|----------|---------|--------|--------|
-            | 1 | voice.js "Ruta no encontrada" | src/index.js | PR #7 | Resuelto |
-            | 2 | Railway healthcheck failure | src/index.js | direct edit main | Resuelto |
-            | 3 | Alchemer strips data-* attributes | Alchemer JS Action | N/A (config) | Resuelto |
-            | 4 | Click interceptado por label | Alchemer JS Action | N/A (config) | Resuelto |
-            | 5 | Transcripcion falla (VARCHAR + NOT NULL) | src/routes/transcribeImmediate.js | 66708f9 | Resuelto |
-            | 6 | express-rate-limit proxy error | src/index.js | pendiente | Pendiente |
-| exportApi.exportCsv() | GET /export |
-| Supabase Auth JWT | Validado en middleware/auth.js |
+**Nota:** El CLAUDE.md original decia que `audio_path` es nullable, pero el schema SQL real lo define como `TEXT NOT NULL`. Ya se ejecuto `ALTER TABLE recordings ALTER COLUMN audio_path DROP NOT NULL;` en Supabase para alinear el schema. Los placeholders en codigo sirven como doble proteccion.
+
+### Problema 6: express-rate-limit ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+
+**Sintoma:** Error en Railway logs: `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`
+
+**Causa:** Railway opera detras de un reverse proxy. `express-rate-limit` v7+ requiere configuracion explicita de trust proxy.
+
+**Solucion:** Se agrego `app.set('trust proxy', 1)` en `src/index.js` antes de todo middleware.
+
+---
+
+## Resumen de cambios - Integracion Alchemer (2026-02-14/15)
+
+| # | Problema | Archivo | Commit | Estado |
+|---|----------|---------|--------|--------|
+| 1 | voice.js "Ruta no encontrada" | src/index.js | PR #7 | Resuelto |
+| 2 | Railway healthcheck failure | src/index.js | 5820304 | Resuelto |
+| 3 | Alchemer strips data-* attributes | Alchemer JS Action | N/A (config) | Resuelto |
+| 4 | Click interceptado por label | Alchemer JS Action | N/A (config) | Resuelto |
+| 5 | Transcripcion falla (VARCHAR + NOT NULL) | src/routes/transcribeImmediate.js | 66708f9 | Resuelto |
+| 6 | express-rate-limit proxy error | src/index.js | trust-proxy fix | Resuelto |
